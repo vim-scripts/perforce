@@ -1,9 +1,9 @@
 " perforce.vim: Interface with p4 command.
 " Author: Hari Krishna <hari_vim@yahoo.com>
-" Last Modified: 20-Mar-2002 @ 18:40
+" Last Modified: 26-Mar-2002 @ 19:36
 " Created:       not sure, but sometime before 20-Apr-2001
-" Requires: Vim-6.0 or higher, genutils.vim(1.0.15), multvals.vim(2.1.2)
-" Version: 1.1.17
+" Requires: Vim-6.0 or higher, genutils.vim(1.0.19), multvals.vim(2.1.2)
+" Version: 1.1.22
 " Usage: 
 "   - Adds commands and menus (if enabled) to execute perforce commands. There
 "     are commands defined for most used perforce commands such as 'edit' (PE),
@@ -30,6 +30,11 @@
 "     press D or use PFilelogDiff command.
 "   - If you are on the opened or files window, then you can use O for open, R
 "     for revert, P for properties (fstat) and D for diff.
+"   - For convenience the sync/get and print commands take in a revision (as
+"     specified by "help revisions") as the last argument and apply it to the
+"     current file.
+"	To see the revision 1 of the current file, type "PP \#1".
+"	To see the current file as of a date, type "PP @2002/01/01".	
 "   - In the perforce help window, you can use K, <CR> or mouse double click to
 "     on any command name to get the help for that command. You can use Ctrl-O
 "     or u and Ctrl-R and <Tab> to navigate the help history.
@@ -52,6 +57,9 @@
 "     complete menus, on the lines of p4Win. By default, a basic menu is
 "     created. There are also g:p4EnablePopupMenu and g:p4UseExpandedPopupMenu
 "     options to create the Perforce PopUp menu group.
+"   - By default only 100 items are shown in the changes and jobs screens. You
+"     can change this number by setting a balue to g:p4DefaultListSize. Set it
+"     to a negative value to show all.
 "   - If you are manually sourcing the scripts either from vimrc or from
 "     commandline, make sure to source multvals.vim and genutils.vim first.
 "
@@ -63,9 +71,10 @@
 "       PClient (client), PClients (clients), PUser (user), PUsers (users),
 "       PBranch (branch), PBranches (branches), PLabel (label),
 "       PLabels (labels) PLabelsync (labelsync), PJob (job), PJobs (jobs),
-"       PResolve (resolve), PChange (change), PChanges (changes),
-"       PDepot (depot), PDepots (depots), PHave (have), PDescribe (describe),
-"       PFiles (files), PFstat (fstat), PGroup (group), PGroups (groups)
+"       PJobspec (jobspec), PResolve (resolve), PChange (change),
+"       PChanges (changes), PDepot (depot), PDepots (depots), PHave (have),
+"       PDescribe (describe), PFiles (files), PFstat (fstat), PGroup (group),
+"       PGroups (groups)
 "       PF & PFRaw (for generic command execution),
 "       E (command to open a file from a different codeline),
 "       PSwitch (command to switch between different port/client/user settings),
@@ -99,42 +108,39 @@
 "       g:p4CmdPath, g:p4CodelineRoot, g:p4Client, g:p4User, g:p4Port,
 "       g:p4DefaultOptions, g:p4UseGUIDialogs, g:p4EnableMenu,
 "       g:p4EnablePopupMenu, g:p4PromptToCheckout, g:p4UseExpandedMenu,
-"       g:p4UseExpandedPopupMenu, g:p4DefaultChangesSize
+"       g:p4UseExpandedPopupMenu, g:p4DefaultListSize, g:p4DefaultDiffOptions
 "     Environmental variables. 
 "     
 "
-" TODO:
+" TODO: {{{
 "   Sort change lists and show those that are by the current client and others
 "     separately. 
-"   Navigating back to the previous help window doesn't preserve the position,
-"     very inconvenient.
 "   How can I support interactive resolves? Will it be worth doing it? 
-"   Show/hide diff on describe window? 
-"   Diff options to allow standard options to be passed in all the diff
-"     operations. 
+"   Continuous operations on the preview winow is not clean. I do a pclose
+"     before running the next preview command, so the previous buffer is lost
+"     from the history. Since I delete buffers as soon as they are hidden,
+"     there probably is no solution for this.
 "   In filelist view, select the files to be operated upon. 
-"   It will be nice to reuse help windows for all the help commands.
 "   POpened should take in a branch name to show the opened files under the
 "     branch (-b branchname). Also a way to open only of specified type such
 "     as add, edit, delete (-t ?).
 "   How can I avoid prompting for checkout when the current vim session is in
 "     view mode (-R option) ???
 "   Allow file names to be passed into PSubmit command. 
+"   PDiff2 is not clean. 
 "   The PSwitch can't change the p4CodelineRoot, it is best to read this from
 "     'info' after reinitialization.
-"   Set some decent options to edit text, such as ts=8. 
 "   The script is not much intelligent wrt to obtaining the settings from p4.
 "     E.g., it assumes that the local directory name is same as the branch
 "     name.
-"   A new outputType for PFImpl() which is essentially 2 but behaves like 0 if
-"     the output is too big. Commands like revert, sync should use this mode.
 "   Something to enable/disable and switch between basic and expanded menus
 "     will be good.
 "   The list specific menus should be disabled unless you are in that window. 
 "   A command to add/remove preset, which will also add it to the menu. 
 "   If there are spaces in the arguments, is it still going to work? 
-"   Verify that the autocommands are not leaking.
+"   Verify that the buffers/autocommands are not leaking.
 "   Backup/Restore commands for opened files.
+" END TODO }}}
 
 if exists("loaded_perforce")
   finish
@@ -153,7 +159,7 @@ endif
 
 command! -nargs=0 PFInitialize :call <SID>Initialize()
 
-function! s:Initialize()
+function! s:Initialize() " {{{
 
 if exists("g:p4CmdPath")
   let s:p4CmdPath = g:p4CmdPath
@@ -169,11 +175,19 @@ elseif !exists("s:codelineRoot")
   let s:codelineRoot=fnamemodify(".", ":p")
 endif
 
-if exists("g:p4DefaultChangesSize")
-  let s:defaultChangesSize=g:p4DefaultChangesSize
-  unlet g:p4DefaultChangesSize
-elseif !exists("s:defaultChangesSize")
-  let s:defaultChangesSize='100'
+if exists("g:p4DefaultListSize")
+  let s:defaultListSize=g:p4DefaultListSize
+  unlet g:p4DefaultListSize
+elseif !exists("s:defaultListSize")
+  let s:defaultListSize='100'
+endif
+
+if exists("g:p4DefaultDiffOptions")
+  let s:defaultDiffOptions="'" . substitute(g:p4DefaultDiffOptions, ' ', "', '",
+	\ 'g') . "'"
+  unlet g:p4DefaultDiffOptions
+elseif !exists("s:defaultDiffOptions")
+  let s:defaultDiffOptions=''
 endif
 
 if exists("g:p4Client")
@@ -232,6 +246,13 @@ elseif !exists("s:promptToCheckout")
   let s:promptToCheckout = 1
 endif
 
+if exists("g:p4MaxLinesInDialog")
+  let s:maxLinesInDialog = g:p4MaxLinesInDialog
+  unlet g:p4MaxLinesInDialog
+elseif !exists("s:maxLinesInDialog")
+  let s:maxLinesInDialog = 1
+endif
+
 " If the client, user and port are available, and if they are not specified in
 " the p4DefaultOptions, then add them.
 let s:defaultOptions = s:p4DefaultOptions
@@ -253,20 +274,20 @@ command! -nargs=* -complete=file PP :call <SID>PPrint(0, <f-args>)
 " Equivalent to: p4 diff %. You can pass in arguments to diff and a filename.
 command! -nargs=* -complete=file PD :call <SID>PDiff(0, <f-args>)
 " Equivalent to: p4 edit %
-command! -nargs=* -complete=file PE :call <SID>PEdit(2, <f-args>)
+command! -nargs=* -complete=file PE :call <SID>PEdit(20, <f-args>)
 " Equivalent to: p4 add %
-command! -nargs=* -complete=file PA :call <SID>PAdd(2, <f-args>)
+command! -nargs=* -complete=file PA :call <SID>PAdd(20, <f-args>)
 " Equivalent to: p4 delete %
-command! -nargs=* -complete=file PDelete :call <SID>PDelete(2, <f-args>)
+command! -nargs=* -complete=file PDelete :call <SID>PDelete(20, <f-args>)
 " Equivalent to: p4 lock %
-command! -nargs=* -complete=file PLock :call <SID>PLock(2, <f-args>)
+command! -nargs=* -complete=file PLock :call <SID>PLock(20, <f-args>)
 " Equivalent to: p4 unlock %
-command! -nargs=* -complete=file PUnlock :call <SID>PUnlock(2, <f-args>)
+command! -nargs=* -complete=file PUnlock :call <SID>PUnlock(20, <f-args>)
 " Equivalent to: p4 revert %
-command! -nargs=* -complete=file PR :call <SID>PRevert(2, <f-args>)
+command! -nargs=* -complete=file PR :call <SID>PRevert(20, <f-args>)
 " Equivalent to: p4 get/sync %
-command! -nargs=* -complete=file PG :call <SID>PSync(2, <f-args>)
-command! -nargs=* -complete=file PSync :call <SID>PSync(2, <f-args>)
+command! -nargs=* -complete=file PSync :call <SID>PSync(20, <f-args>)
+command! -nargs=* -complete=file PG :call <SID>PSync(20, <f-args>)
 " Equivalent to: p4 opened
 command! -nargs=* PO :call <SID>POpened(0, <f-args>)
 " Equivalent to: p4 have
@@ -276,7 +297,7 @@ command! -nargs=* PDescribe :call <SID>PDescribe(0, <f-args>)
 " Equivalent to: p4 files
 command! -nargs=* PFiles :call <SID>PFiles(0, <f-args>)
 " Equivalent to: p4 labelsync
-command! -nargs=* PLabelsync :call <SID>PFIF(0, 0, 0, <f-args>)
+command! -nargs=* PLabelsync :call <SID>PFIF(0, 0, 0, "labelsync", <f-args>)
 " Equivalent to: p4 filelog. You can press <Enter> to view the revision, or
 "   press S to sync to that revision. You can also press C to describe the
 "   change.
@@ -288,7 +309,7 @@ command! -nargs=* -complete=file PD2 :call <SID>PDiff2(0, <f-args>)
 " Equivalent to: p4 fstat %.
 command! -nargs=* -complete=file PFstat :call <SID>PFstat(0, <f-args>)
 " Same as: p4 help. You can drill down the help by pressing <Enter>
-command! -nargs=* PH :call <SID>PHelp(0, <f-args>)
+command! -nargs=* PH :call <SID>PHelp(5, <f-args>)
 
 
 """ Some list view commands.
@@ -298,7 +319,7 @@ command! -nargs=* PBranches :PF branches <args>
 command! -nargs=* PLabels :call <SID>PLabels(0, <f-args>)
 command! -nargs=* PClients :PF clients <args>
 command! -nargs=* PUsers :PF users <args>
-command! -nargs=* PJobs :PF jobs <args>
+command! -nargs=* PJobs :call <SID>PJobs(0, <f-args>)
 command! -nargs=* PDepots :PF depots <args>
 command! -nargs=* PGroups :PF groups <args>
 
@@ -318,6 +339,8 @@ command! -nargs=* PClient :call <SID>PClient(0, <f-args>)
 command! -nargs=* PUser :call <SID>PUser(0, <f-args>)
 " Same as: p4 job. You can edit and save job spec. by using :W command.
 command! -nargs=* PJob :call <SID>PJob(0, <f-args>)
+" Same as: p4 jobspec. You can edit and save jobspec. by using :W command.
+command! -nargs=* PJobspec :call <SID>PJobspec(0, <f-args>)
 " Same as: p4 depot. You can edit and save depot spec. by using :W command.
 command! -nargs=* PDepot :call <SID>PDepot(0, <f-args>)
 " Same as: p4 group. You can edit and save group spec. by using :W command.
@@ -356,6 +379,25 @@ command! -nargs=* W :echohl WarningMsg |
       \ echo "Use PW if you want to write current buffer into a perforce command"
       \ | echohl NONE
 
+function! s:CreateDummyCommand(cmdName)
+  exec "command! " . a:cmdName . " echohl WarningMsg | " .
+	\ "echo 'This command is not defined for this buffer.' | echohl NONE"
+endfunction
+call s:CreateDummyCommand('PItemDescribe')
+call s:CreateDummyCommand('PItemOpen')
+call s:CreateDummyCommand('PItemDelete')
+call s:CreateDummyCommand('PFilelogSync')
+call s:CreateDummyCommand('PFilelogDescribe')
+call s:CreateDummyCommand('PChangesSubmit')
+call s:CreateDummyCommand('PChangesOpened')
+call s:CreateDummyCommand('PLabelsSyncClient')
+call s:CreateDummyCommand('PLabelsSyncLabel')
+call s:CreateDummyCommand('PFileDiff')
+call s:CreateDummyCommand('PFileProps')
+call s:CreateDummyCommand('PFileRevert')
+delfunction s:CreateDummyCommand
+
+
 let s:changesExpr  = "matchstr(getline(\".\"), " . "'" . '^Change \zs\d\+\ze ' .
       \ "'" . ")"
 let s:branchesExpr = "matchstr(getline(\".\"), " . "'" .
@@ -374,10 +416,11 @@ let s:depotsExpr   = "matchstr(getline(\".\"), " . "'" .
 "let s:describeExpr = "s:ConvertToLocalPath(expand('<cfile>'))"
 "let s:filesExpr    = "s:ConvertToLocalPath(expand('<cfile>'))"
 let s:openedExpr   = "s:ConvertToLocalPath(s:GetCurrentDepotFile(line('.')))"
-let s:describeExpr = "s:ConvertToLocalPath(s:GetCurrentDepotFile(line('.')))"
+"let s:describeExpr = "s:ConvertToLocalPath(s:GetCurrentDepotFile(line('.')))"
+let s:describeExpr = "s:DescribeGetCurrentItem()"
 let s:filesExpr    = "s:ConvertToLocalPath(s:GetCurrentDepotFile(line('.')))"
 let s:haveExpr     = "s:ConvertToLocalPath(s:GetCurrentDepotFile(line('.')))"
-let s:filelogExpr  = "s:GetCurrentDepotFile(line("."))"
+let s:filelogExpr  = "s:GetCurrentDepotFile(line('.'))"
 let s:groupsExpr   = "expand('<cword>')"
 
 " If an explicit handler is defined, then it will override the default rule of
@@ -413,9 +456,9 @@ function! s:CreateMenu(sub, expanded)
   exec 'amenu <silent> ' . a:sub . '&Perforce' . fileGroup . '&Diff :PD<CR>'
   exec 'amenu <silent> ' . a:sub . '&Perforce' . fileGroup . 'Diff&2 :PD2<CR>'
   exec 'amenu <silent> ' . a:sub . '&Perforce' . fileGroup .
-        \ 'Revision\ &History :PF filelog %<CR>'
+        \ 'Revision\ &History :PFilelog<CR>'
   exec 'amenu <silent> ' . a:sub . '&Perforce' . fileGroup . 'Propert&ies ' .
-        \ ':PF fstat -C %<CR>'
+        \ ':PFstat -C<CR>'
   exec 'amenu <silent> ' . a:sub . '&Perforce' . fileGroup . '&Print :PP<CR>'
   exec 'amenu <silent> ' . a:sub . '&Perforce' . fileGroup . '-Sep4- :'
   if a:expanded
@@ -441,17 +484,17 @@ function! s:CreateMenu(sub, expanded)
   exec 'amenu <silent> ' . a:sub . '&Perforce.-Sep5- :'
   else
     exec 'amenu <silent> ' . a:sub .
-          \ '&Perforce.&View.&BranchSpecs :PF branches<CR>'
+          \ '&Perforce.&View.&BranchSpecs :PBranches<CR>'
     exec 'amenu <silent> ' . a:sub . '&Perforce.&View.&Changelist.' .
-          \ '&Pending\ Changelists :PF changes -s pending<CR>'
+          \ '&Pending\ Changelists :PChanges -s pending<CR>'
     exec 'amenu <silent> ' . a:sub . '&Perforce.&View.&Changelist.' .
-          \ '&Submitted\ Changelists :PF changes -s submitted<CR>'
+          \ '&Submitted\ Changelists :PChanges -s submitted<CR>'
     exec 'amenu <silent> ' . a:sub .
-          \ '&Perforce.&View.Cl&ientSpecs :PF clients<CR>'
-    exec 'amenu <silent> ' . a:sub . '&Perforce.&View.&Jobs :PF jobs<CR>'
-    exec 'amenu <silent> ' . a:sub . '&Perforce.&View.&Labels :PF labels<CR>'
-    exec 'amenu <silent> ' . a:sub . '&Perforce.&View.&Users :PF users<CR>'
-    exec 'amenu <silent> ' . a:sub . '&Perforce.&View.&Depots :PF depots<CR>'
+          \ '&Perforce.&View.Cl&ientSpecs :PClients<CR>'
+    exec 'amenu <silent> ' . a:sub . '&Perforce.&View.&Jobs :PJobs<CR>'
+    exec 'amenu <silent> ' . a:sub . '&Perforce.&View.&Labels :PLabels<CR>'
+    exec 'amenu <silent> ' . a:sub . '&Perforce.&View.&Users :PUsers<CR>'
+    exec 'amenu <silent> ' . a:sub . '&Perforce.&View.&Depots :PDepots<CR>'
     exec 'amenu <silent> ' . a:sub . '&Perforce.&View.&Opened\ Files :PO<CR>'
     exec 'amenu <silent> ' . a:sub . '&Perforce.&View.&Refresh\ Active\ Pane ' .
           \ ':PRefreshActivePane<CR>'
@@ -478,18 +521,18 @@ function! s:CreateMenu(sub, expanded)
   else
     exec 'amenu <silent> ' . a:sub . '&Perforce.&Changelist.&New :PChange<CR>'
     exec 'amenu <silent> ' . a:sub . '&Perforce.&Changelist.' .
-          \ '&Edit\ Current\ Changelist :silent! exec "PItemOpen"<CR>'
+          \ '&Edit\ Current\ Changelist :PItemOpen<CR>'
     exec 'amenu <silent> ' . a:sub . '&Perforce.&Changelist.' .
-          \ 'Descri&be\ Current\ Changelist :silent! exec "PItemDescribe"<CR>'
+          \ 'Descri&be\ Current\ Changelist :PItemDescribe<CR>'
     exec 'amenu <silent> ' . a:sub . '&Perforce.&Changelist.' .
-          \ '&Delete\ Current\ Changelist :silent! exec "PItemDelete"<CR>'
+          \ '&Delete\ Current\ Changelist :PItemDelete<CR>'
     exec 'amenu <silent> ' . a:sub . '&Perforce.&Changelist.' .
           \ 'New\ &Submission\ Template :PSubmit<CR>'
     exec 'amenu <silent> ' . a:sub . '&Perforce.&Changelist.-Sep- :'
     exec 'amenu <silent> ' . a:sub . '&Perforce.&Changelist.' .
-          \ 'View\ &Pending\ Changelists :PF changes -s pending<CR>'
+          \ 'View\ &Pending\ Changelists :PChanges -s pending<CR>'
     exec 'amenu <silent> ' . a:sub . '&Perforce.&Changelist.' .
-          \ '&View\ Submitted\ Changelists :PF changes -s submitted<CR>'
+          \ '&View\ Submitted\ Changelists :PChanges -s submitted<CR>'
   endif
 
   if ! a:expanded
@@ -497,14 +540,14 @@ function! s:CreateMenu(sub, expanded)
   else
     exec 'amenu <silent> ' . a:sub . '&Perforce.&Branch.&New :PBranch<CR>'
     exec 'amenu <silent> ' . a:sub . '&Perforce.&Branch.' .
-          \ '&Edit\ Current\ BranchSpec :silent! exec "PItemOpen"<CR>'
+          \ '&Edit\ Current\ BranchSpec :PItemOpen<CR>'
     exec 'amenu <silent> ' . a:sub . '&Perforce.&Branch.' .
-          \ 'Descri&be\ Current\ BranchSpec :silent! exec "PItemDescribe"<CR>'
+          \ 'Descri&be\ Current\ BranchSpec :PItemDescribe<CR>'
     exec 'amenu <silent> ' . a:sub . '&Perforce.&Branch.' .
-          \ '&Delete\ Current\ BranchSpec :silent! exec "PItemDelete"<CR>'
+          \ '&Delete\ Current\ BranchSpec :PItemDelete<CR>'
     exec 'amenu <silent> ' . a:sub . '&Perforce.&Branch.-Sep- :'
     exec 'amenu <silent> ' . a:sub .
-          \ '&Perforce.&Branch.&View\ BranchSpecs :PF branches<CR>'
+          \ '&Perforce.&Branch.&View\ BranchSpecs :PBranches<CR>'
   endif
 
   if ! a:expanded
@@ -512,21 +555,21 @@ function! s:CreateMenu(sub, expanded)
   else
     exec 'amenu <silent> ' . a:sub . '&Perforce.&Label.&New :PLabel<CR>'
     exec 'amenu <silent> ' . a:sub . '&Perforce.&Label.' .
-          \ '&Edit\ Current\ LabelSpec :silent! exec "PItemOpen"<CR>'
+          \ '&Edit\ Current\ LabelSpec :PItemOpen<CR>'
     exec 'amenu <silent> ' . a:sub . '&Perforce.&Label.' .
-          \ 'Descri&be\ Current\ LabelSpec :silent! exec "PItemDescribe"<CR>'
+          \ 'Descri&be\ Current\ LabelSpec :PItemDescribe<CR>'
     exec 'amenu <silent> ' . a:sub . '&Perforce.&Label.' .
-          \ '&Delete\ Current\ LabelSpec :silent! exec "PItemDelete"<CR>'
+          \ '&Delete\ Current\ LabelSpec :PItemDelete<CR>'
     exec 'amenu <silent> ' . a:sub . '&Perforce.&Label.-Sep1- :'
     exec 'amenu <silent> ' . a:sub . '&Perforce.&Label.' .
-          \ '&Sync\ client\ ' . s:p4Client . '\ to\ current\ label ' .
-          \ ':silent! exec "PLabelsSyncClient"<CR>'
+          \ '&Sync\ Client\ ' . s:p4Client . '\ to\ Current\ Label ' .
+          \ ':PLabelsSyncClient<CR>'
     exec 'amenu <silent> ' . a:sub . '&Perforce.&Label.' .
-          \ '&Replace\ files\ in\ current\ label\ with\ client\ ' . s:p4Client .
-          \ '\ files ' . ':silent! exec "PLabelsSyncLabel"<CR>'
+          \ '&Replace\ Files\ in\ Current\ Label\ with\ Client\ ' . s:p4Client .
+          \ '\ files ' . ':PLabelsSyncLabel<CR>'
     exec 'amenu <silent> ' . a:sub . '&Perforce.&Label.-Sep2- :'
     exec 'amenu <silent> ' . a:sub .
-          \ '&Perforce.&Label.&View\ Labels :silent! exec "PF labels"<CR>'
+          \ '&Perforce.&Label.&View\ Labels :PLabels<CR>'
   endif
 
   if ! a:expanded
@@ -535,19 +578,19 @@ function! s:CreateMenu(sub, expanded)
     exec 'amenu <silent> ' . a:sub .
           \ '&Perforce.Cl&ient.&New :call s:NewClient()<CR>'
     exec 'amenu <silent> ' . a:sub . '&Perforce.Cl&ient.' .
-          \ '&Edit\ Current\ ClientSpec :silent! exec "PItemOpen"<CR>'
+          \ '&Edit\ Current\ ClientSpec :PItemOpen<CR>'
     exec 'amenu <silent> ' . a:sub . '&Perforce.Cl&ient.' .
-          \ 'Descri&be\ Current\ ClientSpec :silent! exec "PItemDescribe"<CR>'
+          \ 'Descri&be\ Current\ ClientSpec :PItemDescribe<CR>'
     exec 'amenu <silent> ' . a:sub . '&Perforce.Cl&ient.' .
-          \ '&Delete\ Current\ ClientSpec :silent! exec "PItemDelete"<CR>'
+          \ '&Delete\ Current\ ClientSpec :PItemDelete<CR>'
     exec 'amenu <silent> ' . a:sub . '&Perforce.' .
           \ 'Cl&ient.&Edit\ ' . escape(s:p4Client, ' ') . ' :PClient<CR>'
     exec 'amenu <silent> ' . a:sub . '&Perforce.Cl&ient.-Sep- :'
-    exec 'amenu <silent> ' . a:sub . '&Perforce.Cl&ient.&Switch\ to\ current' .
-          \ '\ client :exec "PSwitch ' . s:p4Port .
+    exec 'amenu <silent> ' . a:sub . '&Perforce.Cl&ient.&Switch\ to\ Current' .
+          \ '\ Client :exec "PSwitch ' . s:p4Port .
           \ ' " . <SID>GetCurrentItem()<CR>'
     exec 'amenu <silent> ' . a:sub .
-          \ '&Perforce.Cl&ient.&View\ ClientSpecs :PF clients<CR>'
+          \ '&Perforce.Cl&ient.&View\ ClientSpecs :PClients<CR>'
   endif
 
   if ! a:expanded
@@ -556,19 +599,19 @@ function! s:CreateMenu(sub, expanded)
     exec 'amenu <silent> ' . a:sub .
           \ '&Perforce.&User.&New :call s:NewUser()<CR>'
     exec 'amenu <silent> ' . a:sub . '&Perforce.&User.' .
-          \ '&Edit\ Current\ UserSpec :silent! exec "PItemOpen"<CR>'
+          \ '&Edit\ Current\ UserSpec :PItemOpen<CR>'
     exec 'amenu <silent> ' . a:sub . '&Perforce.&User.' .
-          \ 'Descri&be\ Current\ UserSpec :silent! exec "PItemDescribe"<CR>'
+          \ 'Descri&be\ Current\ UserSpec :PItemDescribe<CR>'
     exec 'amenu <silent> ' . a:sub . '&Perforce.&User.' .
-          \ '&Delete\ Current\ UserSpec :silent! exec "PItemDelete"<CR>'
+          \ '&Delete\ Current\ UserSpec :PItemDelete<CR>'
     exec 'amenu <silent> ' . a:sub .
           \ '&Perforce.&User.&Edit\ ' . escape(s:p4User, ' ') . ' :PSU<CR>'
     exec 'amenu <silent> ' . a:sub . '&Perforce.&User.-Sep- :'
-    exec 'amenu <silent> ' . a:sub . '&Perforce.&User.&Switch\ to\ current' .
-          \ '\ user :exec "PSwitch ' . s:p4Port . ' ' . s:p4Client .
+    exec 'amenu <silent> ' . a:sub . '&Perforce.&User.&Switch\ to\ Current' .
+          \ '\ User :exec "PSwitch ' . s:p4Port . ' ' . s:p4Client .
           \ ' " . <SID>GetCurrentItem()<CR>'
     exec 'amenu <silent> ' . a:sub .
-          \ '&Perforce.&User.&View\ Users :PF users<CR>'
+          \ '&Perforce.&User.&View\ Users :PUsers<CR>'
   endif
 
   if ! a:expanded
@@ -576,34 +619,38 @@ function! s:CreateMenu(sub, expanded)
   else
     exec 'amenu <silent> ' . a:sub . '&Perforce.&Job.&New :PJob<CR>'
     exec 'amenu <silent> ' . a:sub . '&Perforce.&Job.' .
-          \ '&Edit\ Current\ JobSpec :silent! exec "PItemOpen"<CR>'
+          \ '&Edit\ Current\ JobSpec :PItemOpen<CR>'
     exec 'amenu <silent> ' . a:sub . '&Perforce.&Job.' .
-          \ 'Descri&be\ Current\ JobSpec :silent! exec "PItemDescribe"<CR>'
+          \ 'Descri&be\ Current\ JobSpec :PItemDescribe<CR>'
     exec 'amenu <silent> ' . a:sub . '&Perforce.&Job.' .
-          \ '&Delete\ Current\ JobSpec :silent! exec "PItemDelete"<CR>'
-    exec 'amenu <silent> ' . a:sub . '&Perforce.&Job.-Sep- :'
-    exec 'amenu <silent> ' . a:sub . '&Perforce.&Job.&View\ Jobs :PF jobs<CR>'
+          \ '&Delete\ Current\ JobSpec :PItemDelete<CR>'
+    exec 'amenu <silent> ' . a:sub . '&Perforce.&Job.-Sep1- :'
+    exec 'amenu <silent> ' . a:sub . '&Perforce.&Job.&Edit\ Job&Spec ' .
+	  \ ':PJobspec<CR>'
+    exec 'amenu <silent> ' . a:sub . '&Perforce.&Job.-Sep2- :'
+    exec 'amenu <silent> ' . a:sub . '&Perforce.&Job.&View\ Jobs :PJobs<CR>'
   endif
 
   if a:expanded
     exec 'amenu <silent> ' . a:sub . '&Perforce.&Depot.&New :PDepot<CR>'
     exec 'amenu <silent> ' . a:sub . '&Perforce.&Depot.' .
-          \ '&Edit\ Current\ DepotSpec :silent! exec "PItemOpen"<CR>'
+          \ '&Edit\ Current\ DepotSpec :PItemOpen<CR>'
     exec 'amenu <silent> ' . a:sub . '&Perforce.&Depot.' .
-          \ 'Descri&be\ Current\ DepotSpec :silent! exec "PItemDescribe"<CR>'
+          \ 'Descri&be\ Current\ DepotSpec :PItemDescribe<CR>'
     exec 'amenu <silent> ' . a:sub . '&Perforce.&Depot.' .
-          \ '&Delete\ Current\ DepotSpec :silent! exec "PItemDelete"<CR>'
+          \ '&Delete\ Current\ DepotSpec :PItemDelete<CR>'
     exec 'amenu <silent> ' . a:sub . '&Perforce.&Depot.-Sep- :'
     exec 'amenu <silent> ' . a:sub .
-          \ '&Perforce.&Depot.&View\ Depots :PF depots<CR>'
+          \ '&Perforce.&Depot.&View\ Depots :PDepots<CR>'
   endif
 
   if ! a:expanded
     exec 'amenu <silent> ' . a:sub .
-          \ '&Perforce.Open\ Current\ File\ From\ A&nother\ Codeline :E<CR>'
+          \ '&Perforce.Open\ Current\ File\ From\ A&nother\ Branch :E<CR>'
   else
     exec 'amenu <silent> ' . a:sub .
-          \ '&Perforce.&Tools.Open\ File\ From\ A&nother\ Codeline :E<CR>'
+          \ '&Perforce.&Tools.Open\ Current\ File\ From\ A&nother\ Branch ' .
+	  \ ':E<CR>'
   endif
 
   exec 'amenu <silent> ' . a:sub . '&Perforce.-Sep4- :'
@@ -721,17 +768,19 @@ let s:p4SubmitTemplate = "Change:\tnew\n\n" .
       \ "Description:\n\t<enter description here>\n\n" .
       \ "Files:\n"
 
+let s:helpWinName = 'P4\ help'
+
 " Delete unnecessary stuff.
 delfunction s:CreateMenu
 
-endfunction " s:Initialize
+endfunction " s:Initialize }}}
 call s:Initialize()
 
 
 function! s:PPrint(outputType, ...)
   exec g:makeArgumentString
-  let err
-  exec "let err = s:PFIF(1, a:outputType, 1, 'print', " . argumentString . ")"
+  exec "let err = s:PFIF(1, a:outputType, '12', 'print', " . argumentString .
+	\ ")"
 
   if !err && s:StartBufSetup(a:outputType)
     let &ft=s:GuessFileTypeForCurrentWindow()
@@ -775,43 +824,40 @@ function! s:PHave(outputType, ...)
 endfunction
 
 
-function! s:SetupFileBrowse(outputType)
-  if s:StartBufSetup(a:outputType)
-    set ft=perforce
-    " For now, assume that a new window is created and we are in the new window.
-    exec "setlocal includeexpr=" . s:myScriptId . "ConvertToLocalPath(v:fname)"
+function! s:PDescribe(outputType, ...)
+  exec g:makeArgumentString
+  let argumentString = s:AddDiffOptions(argumentString)
 
-    silent! nunmap <buffer> D " No meaning for delete.
-    delcommand PItemDelete
-    command! -buffer -nargs=0 PFileDiff :call <SID>PDiff(1,
-          \ <SID>ConvertToLocalPath(<SID>GetCurrentDepotFile(line("."))))
-    nnoremap <silent> <buffer> D :PFileDiff<CR>
-    command! -buffer -nargs=0 PFileProps :call <SID>PFstat(0, '-C',
-          \ <SID>ConvertToLocalPath(<SID>GetCurrentDepotFile(line("."))))
-    nnoremap <silent> <buffer> P :PFileProps<CR>
-    command! -buffer -nargs=0 PFileRevert :call <SID>PRevert(2,
-          \ <SID>ConvertToLocalPath(<SID>GetCurrentDepotFile(line("."))))
-    nnoremap <silent> <buffer> R :PFileRevert<CR>
+  exec "let err = s:PFIF(1, a:outputType, 1, 'describe', " . argumentString .
+        \ ")"
+  if !err && s:StartBufSetup(a:outputType)
+    call s:SetupFileBrowse(a:outputType)
+    if match(argumentString, '-s\>') != -1
+      setlocal modifiable
+      call append('$', "\t<SHOW DIFFS>")
+      setlocal nomodifiable
+    endif
 
     call s:EndBufSetup(a:outputType)
   endif
 endfunction
 
 
-function! s:PDescribe(outputType, ...)
-  exec g:makeArgumentString
-  exec "let err = s:PFIF(1, a:outputType, 1, 'describe', " . argumentString .
-        \ ")"
-  if !err && s:StartBufSetup(a:outputType)
-    call s:SetupFileBrowse(a:outputType)
-
-    call s:EndBufSetup(a:outputType)
+function! s:DescribeGetCurrentItem()
+  if getline(".") == "\t<SHOW DIFFS>"
+    let b:p4FullCmd = substitute(b:p4FullCmd, '-s\>', '', '')
+    call s:PRefreshActivePane()
+    return ""
+  else
+    return s:ConvertToLocalPath(s:GetCurrentDepotFile(line('.')))
   endif
 endfunction
 
 
 function! s:PDiff(outputType, ...)
   exec g:makeArgumentString
+  let argumentString = s:AddDiffOptions(argumentString)
+
   exec "let err = s:PFIF(1, a:outputType, 1, 'diff', " . argumentString . ")"
   if !err && s:StartBufSetup(a:outputType)
     set ft=diff
@@ -843,10 +889,6 @@ function! s:PFstat(outputType, ...)
   exec g:makeArgumentString
   exec "let err = s:PFIF(1, " . a:outputType . ", 1, 'fstat', " .
         \ argumentString . ")"
-  if !err && s:StartBufSetup(a:outputType)
-    set ft=perforce
-    call s:EndBufSetup(a:outputType)
-  endif
 endfunction
 
 
@@ -854,6 +896,7 @@ function! s:PDelete(outputType, ...)
   exec g:makeArgumentString
   exec "let err = s:PFIF(1, " . a:outputType . ", 1, 'delete', " .
         \ argumentString . ")"
+  checktime
 endfunction
 
 
@@ -892,7 +935,7 @@ function! s:PSync(outputType, ...)
   exec g:makeArgumentString
   let _autoread = &autoread
   set autoread
-  exec "let err = s:PFIF(1, " . a:outputType . ", 1, 'sync', " .
+  exec "let err = s:PFIF(1, " . a:outputType . ", '12', 'sync', " .
         \ argumentString . ")"
   checktime
   let &autoread = _autoread
@@ -921,6 +964,8 @@ function! s:PDiff2(outputType, ...)
   else
     exec g:makeArgumentString
   endif
+
+  let argumentString = s:AddDiffOptions(argumentString)
   exec "let err = s:PFIF(1, a:outputType, 0, 'diff2', " . argumentString . ")"
   if !err && s:StartBufSetup(a:outputType)
     set ft=diff
@@ -1076,6 +1121,13 @@ function! s:PJob(outputType, ...)
 endfunction
 
 
+function! s:PJobspec(outputType, ...)
+  exec g:makeArgumentString
+  exec "call s:InteractiveCommand(a:outputType, 'jobspec', 'interactive', " .
+        \ "'none', '^Fields:', " . argumentString . ")"
+endfunction
+
+
 function! s:NewUser()
   let userName = s:PromptFor(0, s:useDialogs, "User name: ", '')
   if userName == ""
@@ -1134,7 +1186,7 @@ function! s:PSubmit(outputType, ...)
   if s:p4Arguments == ""
     call s:ResetP4Vars()
     let s:p4Command = "submit"
-    let s:p4WinName = "P4\ submit"
+    let s:p4WinName = 'P4\ submit'
 
     call s:PFImpl(a:outputType, "", 2, s:p4SubmitTemplate)
     $
@@ -1168,9 +1220,9 @@ function! s:PFilelog(outputType, ...)
   if !err && s:StartBufSetup(a:outputType)
     set ft=perforce
     silent! nunmap <buffer> D " No meaning for delete.
-    delcommand PItemDelete
+    silent! delcommand PItemDelete
     silent! nunmap <buffer> O " No meaning for open/edit.
-    delcommand PItemOpen
+    silent! delcommand PItemOpen
     command! -range -buffer -nargs=0 PFilelogDiff
           \ :call s:FilelogDiff2(<line1>, <line2>)
     vnoremap <silent> <buffer> D :PFilelogDiff<CR>
@@ -1185,18 +1237,36 @@ function! s:PFilelog(outputType, ...)
 endfunction
 
 
+function! s:RunLimitListCommand(outputType, commandName, ...)
+  exec g:makeArgumentString
+  if match(argumentString, '-m\>') == -1 && s:defaultListSize > -1
+    " Insert -m <size> arguments just after the command name.
+    if match(argumentString, '\<' . a:commandName . '\>') != -1
+      let argumentString = substitute(argumentString, '\<' . a:commandName .
+	    \ '\>', a:commandName . "', '-m', '" . s:defaultListSize, '')
+    else
+      let argumentString = "'-m', '" . s:defaultListSize . "', " .
+	    \ argumentString
+  endif
+  exec "let err = s:PFIF(1, a:outputType, 1, a:commandName, " .
+	\ argumentString . ")"
+  return err
+endfunction
+
+
+function! s:PJobs(outputType, ...)
+  exec g:makeArgumentString
+  exec "let err = s:RunLimitListCommand(a:outputType, 'jobs', " .
+	\ argumentString . ")"
+endfunction
+
+
 function! s:PChanges(outputType, ...)
   exec g:makeArgumentString
-  if match(argumentString, '-m\>') == -1
-    let argumentString = MvAddElement(argumentString, ", ", "'-m', '" .
-          \ s:defaultChangesSize . "'")
-  endif
-  exec "let err = s:PFIF(1, a:outputType, 1, 'changes', " . argumentString . ")"
+  exec "let err = s:RunLimitListCommand(a:outputType, 'changes', " .
+	\ argumentString . ")"
 
   if !err && s:StartBufSetup(a:outputType)
-    silent! nunmap <buffer> D " No meaning for delete.
-    delcommand PItemDelete
-
     command! -buffer -nargs=0 PItemDescribe :call <SID>PDescribe(1, '-s',
           \ <SID>GetCurrentItem())
     command! -buffer -nargs=0 PChangesSubmit
@@ -1288,6 +1358,13 @@ function! s:InteractiveCommand(outputType, commandName, commandType,
     endif
     set ft=perforce
 
+    " Set some options for text editing.
+    setlocal tabstop=8
+    setlocal softtabstop=0
+    setlocal shiftwidth=8
+    setlocal noexpandtab
+    setlocal autoindent
+
     call s:EndBufSetup(a:outputType)
   endif
 
@@ -1302,11 +1379,17 @@ endfunction
 
 
 function! s:PHelp(outputType, ...)
+  call SaveWindowSettings2("PerforceHelp", 0)
+  " If there is a help window already open, then we need to reuse it.
   exec g:makeArgumentString
+
   exec "let err = s:PFIF(1, a:outputType, 0, 'help', " . argumentString . ")"
 
   if !err && s:StartBufSetup(a:outputType)
     call s:SetupSelectHelp()
+    " Maximize the window, like vim help window.
+    wincmd K
+    wincmd _
     redraw | echo "Press <Enter> or K to drilldown on perforce help keywords."
 
     call s:EndBufSetup(a:outputType)
@@ -1339,8 +1422,11 @@ endfunction
 
 " The commandName may not be the commandName always when the user types in,
 "   but at least it is (and should be), for the scriptOrigin.
-function! s:PFIF(scriptOrigin, outputType, defaultToCurrentFile, commandName,
-      \ ...)
+" argOptions: A combination string of one or more of the following flags.
+"   0 - No special handling.
+"   1 - Default to current file. 
+"   2 - Treat the number arg as a version to the current file. 
+function! s:PFIF(scriptOrigin, outputType, argOptions, commandName, ...)
   exec g:makeArgumentString
     " For scriptOrigin, there is a possibility of having the commandName
     "   already in the var. args.
@@ -1367,16 +1453,24 @@ function! s:PFIF(scriptOrigin, outputType, defaultToCurrentFile, commandName,
     endif
   endif
 
-  if s:p4Command == 'sync' && s:p4LastArg =~ '^\s*[\\]*#\d\+$'
-    let s:p4Arguments = substitute(s:p4Arguments, '^\s*\([\\]*#\d\+$\)',
-          \ expand("%") . '\1', '')
-  elseif a:defaultToCurrentFile && s:p4LastArg == ""
+  " Handle arguments based on the argOptions.
+  if a:argOptions =~ "1" && s:p4LastArg == ""
+    " I expect s:p4Arguments to be empty in this case, but just in case...
     let s:p4Arguments = MvAddElement(s:p4Arguments, ' ', expand("%"))
+  endif
+  if a:argOptions =~ "2" && s:p4LastArg =~ '^[\\]\+#\(\d\+\|none\|head\|have\)$'
+    let s:p4Arguments = substitute(s:p4Arguments,
+          \ '[\\]\+#\(\d\+\|none\|head\|have\)$', expand("%") . '\\#\1', '')
+  endif
+  if a:argOptions =~ "2" && s:p4LastArg =~ '^@\S\+$'
+    let s:p4Arguments = substitute(s:p4Arguments, '@\S\+$',
+          \ expand("%") . '&', '')
+    let s:p4Arguments = expand("%") . s:p4LastArg
   endif
 
   if s:p4Command == 'help' 
     " Use simple window name for all the help commands.
-    let s:p4WinName = "P4\ help"
+    let s:p4WinName = s:helpWinName
   endif
 
   let err = s:PFImpl(a:outputType, s:p4CommandPrefix, 0, "")
@@ -1410,18 +1504,6 @@ function! s:PFRaw(outputType, ...)
   exec "call s:ParseOptions(" . argumentString . ")"
 
   call s:PFImpl(a:outputType, s:p4CommandPrefix, 0, "")
-endfunction
-
-
-function! s:SelectHelp()
-  call s:ResetP4Vars()
-  let s:p4Command = "help"
-  let s:p4Arguments = expand("<cword>")
-  let s:p4WinName = "P4\ help"
-
-  setlocal modifiable
-  " I could call PW() but that doesn't set the buffer name correctly.
-  call s:PFImpl(4, '1,$!' . s:p4CommandPrefix, 1, "")
 endfunction
 
 
@@ -1586,11 +1668,44 @@ function! s:FilelogDescribeChange()
 endfunction
 
 
+function! s:AddDiffOptions(argString)
+  let argumentString = a:argString
+  if s:defaultDiffOptions != ""
+    if match(argumentString, '\<diff\>') == -1
+      let argumentString = s:defaultDiffOptions . ', ' . argumentString
+    else
+      let argumentString = substitute(argumentString, "\\<diff\\>'", "diff', " .
+	    \ s:defaultDiffOptions, '')
+    endif
+  endif
+  return argumentString
+endfunction
+
+
+function! s:SetupFileBrowse(outputType)
+  set ft=perforce
+  " For now, assume that a new window is created and we are in the new window.
+  exec "setlocal includeexpr=" . s:myScriptId . "ConvertToLocalPath(v:fname)"
+
+  silent! nunmap <buffer> D " No meaning for delete.
+  silent! delcommand PItemDelete
+  command! -buffer -nargs=0 PFileDiff :call <SID>PDiff(1,
+	\ <SID>ConvertToLocalPath(<SID>GetCurrentDepotFile(line("."))))
+  nnoremap <silent> <buffer> D :PFileDiff<CR>
+  command! -buffer -nargs=0 PFileProps :call <SID>PFstat(0, '-C',
+	\ <SID>ConvertToLocalPath(<SID>GetCurrentDepotFile(line("."))))
+  nnoremap <silent> <buffer> P :PFileProps<CR>
+  command! -buffer -nargs=0 PFileRevert :call <SID>PRevert(2,
+	\ <SID>ConvertToLocalPath(<SID>GetCurrentDepotFile(line("."))))
+  nnoremap <silent> <buffer> R :PFileRevert<CR>
+endfunction
+
+
 function! s:SetupSelectItem()
-  nnoremap <buffer> <silent> D :silent! exec "PItemDelete"<CR>
-  nnoremap <buffer> <silent> O :silent! exec "PItemOpen"<CR>
-  nnoremap <buffer> <silent> <CR> :silent! exec "PItemDescribe"<CR>
-  nnoremap <buffer> <silent> <2-LeftMouse> :silent! exec "PItemDescribe"<CR>
+  nnoremap <buffer> <silent> D :PItemDelete<CR>
+  nnoremap <buffer> <silent> O :PItemOpen<CR>
+  nnoremap <buffer> <silent> <CR> :PItemDescribe<CR>
+  nnoremap <buffer> <silent> <2-LeftMouse> :PItemDescribe<CR>
   command! -buffer -nargs=0 PItemDescribe :call <SID>OpenCurrentItem(1)
   command! -buffer -nargs=0 PItemOpen :call <SID>OpenCurrentItem(0)
   command! -buffer -nargs=0 PItemDelete :call <SID>DeleteCurrentItem()
@@ -1598,13 +1713,44 @@ endfunction
 
 
 function! s:SetupSelectHelp()
-  nnoremap <silent> <buffer> <CR> :call <SID>SelectHelp()<CR>
-  nnoremap <silent> <buffer> K :call <SID>SelectHelp()<CR>
-  nnoremap <silent> <buffer> <2-LeftMouse> :call <SID>SelectHelp()<CR>
-  nnoremap <silent> <buffer> <C-O> u
-  nnoremap <silent> <buffer> <Tab> <C-R>
+  nnoremap <silent> <buffer> <CR> :call <SID>PHelp(5, expand("<cword>"))<CR>
+  nnoremap <silent> <buffer> K :call <SID>PHelp(5, expand("<cword>"))<CR>
+  nnoremap <silent> <buffer> <2-LeftMouse>
+	\ :call <SID>PHelp(5, expand("<cword>"))<CR>
+  nnoremap <silent> <buffer> <C-O> :call <SID>NavigateBack()<CR>
+  nnoremap <silent> <buffer> <Tab> :call <SID>NavigateForward()<CR>
+  call s:PFUnSetupBufAutoClean(s:helpWinName)
+  call AddNotifyWindowClose(s:helpWinName, s:myScriptId . "RestoreWindows")
 endfunction
 
+
+function! s:RestoreWindows(dummy)
+  echomsg "Perforce.RestoreWindows: " . a:dummy . " nwindows = " . NumberOfWindows()
+  call RestoreWindowSettings2("PerforceHelp")
+  call s:PFExecBufClean(s:helpWinName)
+endfunction
+
+
+function! s:NavigateBack()
+  call s:Navigate('u')
+endfunction
+
+
+function! s:NavigateForward()
+  call s:Navigate("\<C-R>")
+endfunction
+
+
+function! s:Navigate(key)
+  let _modifiable = &l:modifiable
+  setlocal modifiable
+  normal mt
+  exec "normal" a:key
+  if line("'t")
+    normal `t
+  endif
+  let &l:modifiable = _modifiable
+endfunction
 
 "
 " Infrastructure.
@@ -1620,6 +1766,10 @@ endfunction
 "   2 - Execute p4 and show the output in a dialog for confirmation.
 "   3 - Execute p4 and echo the output.
 "   4 - Execute p4 but discard output.
+"   5 - Same as 0, but try to reuse an existing window with the same name. 
+"  20 - Execute p4 and if the output is less than s:maxLinesInDialog number of
+"	lines, display a dialog (mode 2), otherwise display in a new window
+"	(mode 0)
 " commandType:
 "   0 - Execute p4 using system() or its equivalent.
 "   1 - Execute p4 as a filter for the current window contents. Use 
@@ -1627,6 +1777,7 @@ endfunction
 "   2 - Don't execute p4. The output is already passed in. 
 " Returns non-zero error-code on failure. 
 function! s:PFImpl(outputType, commandPrefix, commandType, output)
+  let outputType = a:outputType
   let _report = &report
   set report=99999
 
@@ -1635,13 +1786,13 @@ function! s:PFImpl(outputType, commandPrefix, commandType, output)
         \ s:MakeOptions()
   let g:p4FullCmd = fullCmd " Debug.
   " save the name of the current file.
-  let pfCurFileName = expand("%")
+  let p4CurFileName = expand("%")
 
   let error = 0
   if a:commandType == 0
     " If it placing the output in a new window, then we shouldn't use system()
     "   for efficiency reasons.
-    if a:outputType != 0 && a:outputType != 1
+    if outputType != 0 && outputType != 1 && outputType != 5
       " Assume the shellredir is set correctly to capture the error messages.
       let output = system(fullCmd)
 
@@ -1659,34 +1810,61 @@ function! s:PFImpl(outputType, commandPrefix, commandType, output)
   endif
 
   if error == 0
+    if outputType == 20
+      let nLines = strlen(substitute(output, "[^\n]", "", "g"))
+      if nLines > s:maxLinesInDialog
+	let outputType = 0
+      else
+	let outputType = 2
+      endif
+    endif
+
     let newWindowCreated = 0
     " If the output has to be shown in a dialog, bringup a dialog with the
     "   output, otherwise show it in a new window.
-    if a:outputType == 0
-      split
-      let w:pfCurFileName = pfCurFileName
+    if outputType == 0 || outputType == 5 
+      if outputType == 5
+	" If there is a window with this buffer, then we will just move cursor
+	"   into it.
+	let winnr = FindWindowForBuffer(s:p4WinName, 1)
+	if winnr != -1 " If there is a window that is already existing.
+	  call MoveCursorToWindow(winnr)
+	  normal mt
+	else
+	  " If there is no window already existing, then let it be created, just
+	  " like outputType == 0
+	  let outputType = 0
+	endif
+      endif
 
-      exec ":edit " . s:p4WinName
+      if outputType == 0
+	split
+	let w:p4CurFileName = p4CurFileName
+
+	exec ":edit " . s:p4WinName
+      endif
 
       setlocal modifiable
       1,$d " Just in case.
-      if a:commandType == 0
-        exec ".!" . fullCmd
-        let error = s:CheckShellError(output)
+      if a:commandType == 0 && output == ""
+	exec ".!" . fullCmd
+	let error = s:CheckShellError(output)
       else
-        put! =output
+	put! =output
       endif
       call s:PFSetupBuf(s:p4WinName)
+      " Even if outputType==5, and we found an existing window for it, we
+      "	  still want set certain variables.
       let newWindowCreated = 1
-    elseif a:outputType == 1
+    elseif outputType == 1
       pclose
       exec ":pedit " . s:p4WinName
       wincmd p
-      let w:pfCurFileName = pfCurFileName
+      let w:p4CurFileName = p4CurFileName
 
       setlocal modifiable
       1,$d " Just in case.
-      if a:commandType == 0
+      if a:commandType == 0 && output == ""
         exec ".!" . fullCmd
         let error = s:CheckShellError(output)
       else
@@ -1694,17 +1872,17 @@ function! s:PFImpl(outputType, commandPrefix, commandType, output)
       endif
       call s:PFSetupBuf(s:p4WinName)
       let newWindowCreated = 1
-    elseif a:outputType == 2
+    elseif outputType == 2
       call confirm(output, "OK", 1, "Info")
-    elseif a:outputType == 3
+    elseif outputType == 3
       echo output
-    elseif a:outputType == 4
+    elseif outputType == 4
       " Do nothing.
     endif
     if newWindowCreated
       let b:p4Command = s:p4Command
       let b:p4FullCmd = fullCmd
-      if a:outputType == 1
+      if outputType == 1
         wincmd p
       endif
     endif
@@ -1792,7 +1970,7 @@ endfunction
 
 
 function! s:GuessFileTypeForCurrentWindow()
-  let fileExt = s:GuessFileType(w:pfCurFileName)
+  let fileExt = s:GuessFileType(w:p4CurFileName)
   if fileExt == ""
     let fileExt = s:GuessFileType(expand("%"))
   endif
@@ -1884,7 +2062,7 @@ endfunction
 " Must be followed by a call to s:EndBufSetup()
 function! s:StartBufSetup(outputType)
   " If this outputType created a new window, then only do setup.
-  if a:outputType == 0 || a:outputType == 1
+  if a:outputType == 0 || a:outputType == 1 || a:outputType == 5
     if a:outputType == 1
       wincmd p
     endif
@@ -1903,31 +2081,38 @@ function! s:EndBufSetup(outputType)
 endfunction
 
 
-function! s:PFSetupBuf(p4WinName)
+function! s:PFSetupBuf(bufName)
 " call input("PFfilelogSetup")
   call SetupScratchBuffer()
   setlocal nomodified
   setlocal nomodifiable
-  call s:PFSetupBufAutoClean(a:p4WinName)
+  call s:PFSetupBufAutoClean(a:bufName)
 endfunction
 
 
 " Arrange an autocommand such that the buffer is automatically deleted when the
 "  window is quit. Delete the autocommand itself when done.
-function! s:PFSetupBufAutoClean(p4WinName)
+function! s:PFSetupBufAutoClean(bufName)
   aug Perforce
   " Just in case the autocommands are leaking, this will curtail the leak a
   "   little bit.
-  exec "au! BufWinLeave " . a:p4WinName
-  exec "au BufWinLeave " . a:p4WinName .
-        \ " :call <SID>PFExecBufClean('" . a:p4WinName . "')"
+  exec "au! BufWinLeave " . a:bufName
+  exec "au BufWinLeave " . a:bufName .
+        \ " :call <SID>PFExecBufClean('" . a:bufName . "')"
+  aug END
+endfunction
+
+
+function! s:PFUnSetupBufAutoClean(bufName)
+  aug Perforce
+  exec "au! BufWinLeave " . a:bufName
   aug END
 endfunction
 
 
 " Find and delete the buffer. Delete the autocommand itself after that.
-function! s:PFExecBufClean(p4WinName)
-  let bufNo = FindBufferForName(a:p4WinName)
+function! s:PFExecBufClean(bufName)
+  let bufNo = FindBufferForName(a:bufName)
   if bufNo == -1
     " Should not happen
     echoerr "perforce.vim: Internal ERROR detected. Please report this message."
@@ -1938,7 +2123,7 @@ function! s:PFExecBufClean(p4WinName)
   exec "silent! bwipeout! ". bufNo
   let &report=_report
   aug Perforce
-  exec "au! BufWinLeave " . a:p4WinName
+  exec "au! BufWinLeave " . a:bufName
   aug END
 endfunction
 
@@ -1967,3 +2152,4 @@ function! s:PRefreshActivePane()
     let &l:modifiable=_modifiable
   endif
 endfunction
+" vim6:fdm=marker
