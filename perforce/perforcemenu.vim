@@ -1,9 +1,9 @@
 " perforcemenu.vim: Create a menu for perforce plugin.
 " Author: Hari Krishna (hari_vim at yahoo dot com)
-" Last Change: 14-Jan-2004 @ 19:54
+" Last Change: 27-Oct-2004 @ 19:33
 " Created:     07-Nov-2003
 " Requires:    Vim-6.2, perforce.vim(3.0), multvals.vim(3.3)
-" Version:     1.0.2
+" Version:     1.1.0
 " Licence: This program is free software; you can redistribute it and/or
 "          modify it under the terms of the GNU General Public License.
 "          See http://www.gnu.org/copyleft/gpl.txt 
@@ -36,7 +36,7 @@ function! s:Get(setting, ...)
   return val
 endfunction
 
-function! s:PExecCmd(cmd) " {{{
+function! s:PFExecCmd(cmd) " {{{
   if exists(':'.a:cmd)
     exec a:cmd
   else
@@ -44,7 +44,7 @@ function! s:PExecCmd(cmd) " {{{
 	  \ ' is not defined for this buffer.', 'WarningMsg')
   endif
 endfunction
-command! -nargs=1 PExecCmd :call <SID>PExecCmd(<q-args>) " }}}
+command! -nargs=1 PFExecCmd :call <SID>PFExecCmd(<q-args>) " }}}
 
 " CreateMenu {{{
 if s:Get('EnableMenu') || s:Get('EnablePopupMenu') " [-2f]
@@ -90,9 +90,9 @@ function! s:CreateMenu(sub, expanded)
           \ 'Resol&ve.S&how\ Integrations<Tab>resolve\ -n :PResolve -n<CR>'
     exec 'amenu <silent> ' . a:sub . '&Perforce.&File.-Sep5- :'
     exec 'amenu <silent> ' . a:sub . '&Perforce.&File.Sa&ve\ Current\ Spec ' .
-	  \':PExecCmd W<CR>'
+	  \':PFExecCmd W<CR>'
     exec 'amenu <silent> ' . a:sub . '&Perforce.&File.Save\ and\ &Quit\ ' .
-	  \'Current\ Spec :PExecCmd WQ<CR>'
+	  \'Current\ Spec :PFExecCmd WQ<CR>'
   endif
 
   if ! a:expanded
@@ -141,11 +141,11 @@ function! s:CreateMenu(sub, expanded)
   else
     exec 'amenu <silent> ' . a:sub . '&Perforce.&Changelist.&New :PChange<CR>'
     exec 'amenu <silent> ' . a:sub . '&Perforce.&Changelist.' .
-          \ '&Edit\ Current\ Changelist :PExecCmd PItemOpen<CR>'
+          \ '&Edit\ Current\ Changelist :PFExecCmd PItemOpen<CR>'
     exec 'amenu <silent> ' . a:sub . '&Perforce.&Changelist.' .
-          \ 'Descri&be\ Current\ Changelist :PExecCmd PItemDescribe<CR>'
+          \ 'Descri&be\ Current\ Changelist :PFExecCmd PItemDescribe<CR>'
     exec 'amenu <silent> ' . a:sub . '&Perforce.&Changelist.' .
-          \ '&Delete\ Current\ Changelist :PExecCmd PItemDelete<CR>'
+          \ '&Delete\ Current\ Changelist :PFExecCmd PItemDelete<CR>'
     exec 'amenu <silent> ' . a:sub . '&Perforce.&Changelist.' .
           \ 'New\ &Submission\ Template :PSubmit<CR>'
     exec 'amenu <silent> ' . a:sub . '&Perforce.&Changelist.-Sep- :'
@@ -160,11 +160,11 @@ function! s:CreateMenu(sub, expanded)
   else
     exec 'amenu <silent> ' . a:sub . '&Perforce.&Branch.&New :PBranch<CR>'
     exec 'amenu <silent> ' . a:sub . '&Perforce.&Branch.' .
-          \ '&Edit\ Current\ BranchSpec :PExecCmd PItemOpen<CR>'
+          \ '&Edit\ Current\ BranchSpec :PFExecCmd PItemOpen<CR>'
     exec 'amenu <silent> ' . a:sub . '&Perforce.&Branch.' .
-          \ 'Descri&be\ Current\ BranchSpec :PExecCmd PItemDescribe<CR>'
+          \ 'Descri&be\ Current\ BranchSpec :PFExecCmd PItemDescribe<CR>'
     exec 'amenu <silent> ' . a:sub . '&Perforce.&Branch.' .
-          \ '&Delete\ Current\ BranchSpec :PExecCmd PItemDelete<CR>'
+          \ '&Delete\ Current\ BranchSpec :PFExecCmd PItemDelete<CR>'
     exec 'amenu <silent> ' . a:sub . '&Perforce.&Branch.-Sep- :'
     exec 'amenu <silent> ' . a:sub .
           \ '&Perforce.&Branch.&View\ BranchSpecs :PBranches<CR>'
@@ -175,18 +175,18 @@ function! s:CreateMenu(sub, expanded)
   else
     exec 'amenu <silent> ' . a:sub . '&Perforce.&Label.&New :PLabel<CR>'
     exec 'amenu <silent> ' . a:sub . '&Perforce.&Label.' .
-          \ '&Edit\ Current\ LabelSpec :PExecCmd PItemOpen<CR>'
+          \ '&Edit\ Current\ LabelSpec :PFExecCmd PItemOpen<CR>'
     exec 'amenu <silent> ' . a:sub . '&Perforce.&Label.' .
-          \ 'Descri&be\ Current\ LabelSpec :PExecCmd PItemDescribe<CR>'
+          \ 'Descri&be\ Current\ LabelSpec :PFExecCmd PItemDescribe<CR>'
     exec 'amenu <silent> ' . a:sub . '&Perforce.&Label.' .
-          \ '&Delete\ Current\ LabelSpec :PExecCmd PItemDelete<CR>'
+          \ '&Delete\ Current\ LabelSpec :PFExecCmd PItemDelete<CR>'
     exec 'amenu <silent> ' . a:sub . '&Perforce.&Label.-Sep1- :'
     exec 'amenu <silent> ' . a:sub . '&Perforce.&Label.' .
           \ '&Sync\ Client\ ' . s:Get('Client') . '\ to\ Current\ Label ' .
-          \ ':PExecCmd PLabelsSyncClient<CR>'
+          \ ':PFExecCmd PLabelsSyncClient<CR>'
     exec 'amenu <silent> ' . a:sub . '&Perforce.&Label.' .
           \ '&Replace\ Files\ in\ Current\ Label\ with\ Client\ ' .
-          \ s:Get('Client') . '\ files ' . ':PExecCmd PLabelsSyncLabel<CR>'
+          \ s:Get('Client') . '\ files ' . ':PFExecCmd PLabelsSyncLabel<CR>'
     exec 'amenu <silent> ' . a:sub . '&Perforce.&Label.-Sep2- :'
     exec 'amenu <silent> ' . a:sub .
           \ '&Perforce.&Label.&View\ Labels :PLabels<CR>'
@@ -198,11 +198,11 @@ function! s:CreateMenu(sub, expanded)
     exec 'amenu <silent> ' . a:sub .
           \ '&Perforce.Cl&ient.&New :PClient +P<CR>'
     exec 'amenu <silent> ' . a:sub . '&Perforce.Cl&ient.' .
-          \ '&Edit\ Current\ ClientSpec :PExecCmd PItemOpen<CR>'
+          \ '&Edit\ Current\ ClientSpec :PFExecCmd PItemOpen<CR>'
     exec 'amenu <silent> ' . a:sub . '&Perforce.Cl&ient.' .
-          \ 'Descri&be\ Current\ ClientSpec :PExecCmd PItemDescribe<CR>'
+          \ 'Descri&be\ Current\ ClientSpec :PFExecCmd PItemDescribe<CR>'
     exec 'amenu <silent> ' . a:sub . '&Perforce.Cl&ient.' .
-          \ '&Delete\ Current\ ClientSpec :PExecCmd PItemDelete<CR>'
+          \ '&Delete\ Current\ ClientSpec :PFExecCmd PItemDelete<CR>'
     exec 'amenu <silent> ' . a:sub . '&Perforce.' .
           \ 'Cl&ient.&Edit\ ' . escape(s:Get('Client', 'Current Client'), ' ') .
 	  \ ' :PClient<CR>'
@@ -220,11 +220,11 @@ function! s:CreateMenu(sub, expanded)
     exec 'amenu <silent> ' . a:sub .
           \ '&Perforce.&User.&New :PUser +P<CR>'
     exec 'amenu <silent> ' . a:sub . '&Perforce.&User.' .
-          \ '&Edit\ Current\ UserSpec :PExecCmd PItemOpen<CR>'
+          \ '&Edit\ Current\ UserSpec :PFExecCmd PItemOpen<CR>'
     exec 'amenu <silent> ' . a:sub . '&Perforce.&User.' .
-          \ 'Descri&be\ Current\ UserSpec :PExecCmd PItemDescribe<CR>'
+          \ 'Descri&be\ Current\ UserSpec :PFExecCmd PItemDescribe<CR>'
     exec 'amenu <silent> ' . a:sub . '&Perforce.&User.' .
-          \ '&Delete\ Current\ UserSpec :PExecCmd PItemDelete<CR>'
+          \ '&Delete\ Current\ UserSpec :PFExecCmd PItemDelete<CR>'
     exec 'amenu <silent> ' . a:sub .
           \ '&Perforce.&User.&Edit\ ' .
 	  \ escape(s:Get('User', 'Current User'), ' ') . ' :PUser<CR>'
@@ -241,11 +241,11 @@ function! s:CreateMenu(sub, expanded)
   else
     exec 'amenu <silent> ' . a:sub . '&Perforce.&Job.&New :PJob<CR>'
     exec 'amenu <silent> ' . a:sub . '&Perforce.&Job.' .
-          \ '&Edit\ Current\ JobSpec :PExecCmd PItemOpen<CR>'
+          \ '&Edit\ Current\ JobSpec :PFExecCmd PItemOpen<CR>'
     exec 'amenu <silent> ' . a:sub . '&Perforce.&Job.' .
-          \ 'Descri&be\ Current\ JobSpec :PExecCmd PItemDescribe<CR>'
+          \ 'Descri&be\ Current\ JobSpec :PFExecCmd PItemDescribe<CR>'
     exec 'amenu <silent> ' . a:sub . '&Perforce.&Job.' .
-          \ '&Delete\ Current\ JobSpec :PExecCmd PItemDelete<CR>'
+          \ '&Delete\ Current\ JobSpec :PFExecCmd PItemDelete<CR>'
     exec 'amenu <silent> ' . a:sub . '&Perforce.&Job.-Sep1- :'
     exec 'amenu <silent> ' . a:sub . '&Perforce.&Job.&Edit\ Job&Spec ' .
 	  \ ':PJobspec<CR>'
@@ -256,11 +256,11 @@ function! s:CreateMenu(sub, expanded)
   if a:expanded
     exec 'amenu <silent> ' . a:sub . '&Perforce.&Depot.&New :PDepot<CR>'
     exec 'amenu <silent> ' . a:sub . '&Perforce.&Depot.' .
-          \ '&Edit\ Current\ DepotSpec :PExecCmd PItemOpen<CR>'
+          \ '&Edit\ Current\ DepotSpec :PFExecCmd PItemOpen<CR>'
     exec 'amenu <silent> ' . a:sub . '&Perforce.&Depot.' .
-          \ 'Descri&be\ Current\ DepotSpec :PExecCmd PItemDescribe<CR>'
+          \ 'Descri&be\ Current\ DepotSpec :PFExecCmd PItemDescribe<CR>'
     exec 'amenu <silent> ' . a:sub . '&Perforce.&Depot.' .
-          \ '&Delete\ Current\ DepotSpec :PExecCmd PItemDelete<CR>'
+          \ '&Delete\ Current\ DepotSpec :PFExecCmd PItemDelete<CR>'
     exec 'amenu <silent> ' . a:sub . '&Perforce.&Depot.-Sep- :'
     exec 'amenu <silent> ' . a:sub .
           \ '&Perforce.&Depot.&View\ Depots :PDepots<CR>'
@@ -278,9 +278,9 @@ function! s:CreateMenu(sub, expanded)
   if ! a:expanded
     exec 'amenu <silent> ' . a:sub . '&Perforce.-Sep7- :'
     exec 'amenu <silent> ' . a:sub . '&Perforce.Sa&ve\ Current\ Spec ' .
-	  \':PExecCmd W<CR>'
+	  \':PFExecCmd W<CR>'
     exec 'amenu <silent> ' . a:sub . '&Perforce.Save\ and\ &Quit\ ' .
-	  \'Current\ Spec :PExecCmd WQ<CR>'
+	  \'Current\ Spec :PFExecCmd WQ<CR>'
   endif
 
   exec 'amenu <silent> ' . a:sub . '&Perforce.-Sep8- :'

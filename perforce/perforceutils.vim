@@ -1,9 +1,9 @@
-" perforceutils.vim: Additional utilities for for perforce plugin.
+" perforceutils.vim: Add-On utilities for perforce plugin.
 " Author: Hari Krishna (hari_vim at yahoo dot com)
-" Last Change: 19-Apr-2004 @ 19:04
+" Last Change: 25-Oct-2004 @ 19:52
 " Created:     19-Apr-2004
 " Requires:    Vim-6.2
-" Version:     1.0.0
+" Version:     1.2.0
 " Licence: This program is free software; you can redistribute it and/or
 "          modify it under the terms of the GNU General Public License.
 "          See http://www.gnu.org/copyleft/gpl.txt 
@@ -12,6 +12,16 @@
 "   at the end
 let s:save_cpo = &cpo
 set cpo&vim
+
+" Determine the script id.
+function! s:MyScriptId()
+  map <SID>xx <SID>xx
+  let s:sid = maparg("<SID>xx")
+  unmap <SID>xx
+  return substitute(s:sid, "xx$", "", "")
+endfunction
+let s:myScriptId = s:MyScriptId()
+delfunction s:MyScriptId " This is not needed anymore.
 
 " CAUTION: Don't assume the existence of plugin/perforce.vim (or any other
 "   plugins) at the time this file is sourced.
@@ -34,9 +44,10 @@ function! s:DiffOpenSrc(preview) " {{{
     PItemOpen
   endif
   call SaveHardPosition('DiffOpenSrc')
+  let filePat = '\zs[^#]\+\%(#\d\+\)\=\ze\%( ([^)]\+)\)\='
+  let diffHdr = '^diff \%(-\S\+\s\+\)*'
   " Search backwards to find the header for this diff (could contain two
   " depot files or one depot file with or without a local file).
-  let filePat = '\zs[^#]\+\%(#\d\+\)\=\ze\%( ([^)]\+)\)\='
   if search('^==== '.filePat.'\%( - '.filePat.'\)\= ====', 'bW')
     let firstFile = matchstr(getline('.'), '^==== \zs'.filePat.
           \ '\%( - \| ====\)')
@@ -48,6 +59,14 @@ function! s:DiffOpenSrc(preview) " {{{
   elseif search('^--- '.filePat.'.*\n\_^+++ '.filePat, 'bW')
     let firstFile = matchstr(getline(line('.')-1), '^--- \zs.\{-}\ze\t')
     let secondFile = matchstr(getline('.'), '^+++ \zs.\{-}\ze\t')
+    let foundHeader = 1
+
+  " Another GNU diff header, for default output (typically for -r option).
+  elseif search(diffHdr.filePat.' '.filePat, 'bW')
+    exec substitute(substitute(getline('.'),
+          \ diffHdr.'\('.filePat.'\) \('.filePat.'\)',
+          \ ":::let firstFile = '\\1' | let secondFile = '\\2'", ''),
+          \ '^.*:::', '', '')
     let foundHeader = 1
   else
     let foundHeader = 0
@@ -151,7 +170,13 @@ function! s:DiffOpenSrc(preview) " {{{
       endif
     endif
     if PFCall('s:IsDepotPath', file)
-      call PFCall('s:printHdlr', 0, a:preview, file)
+      let refresh = PFGet('s:refreshWindowsAlways')
+      try
+        call PFSet('s:refreshWindowsAlways', 0)
+        call PFCall('s:printHdlr', 0, a:preview, file)
+      finally
+        call PFSet('s:refreshWindowsAlways', refresh)
+      endtry
       let offset = offset + 1 " For print header.
     else
       call PFCall('s:OpenFile', 1, a:preview, CleanupFileName(file))
@@ -191,13 +216,13 @@ function! s:ShowConflicts()
   let _splitright = &splitright
   set splitright
   try
-    let curFile = expand('%:p:t')
+    let curFile = expand('%:p')
     "exec 'split' curFile.'.Original'
     exec 'edit' curFile.'.Original'
     silent! exec 'read' curFile
     silent! 1delete _
-    call PFCall('s:SilentSub', '^==== THEIRS \_.\{-}\%(^<<<<$\)\@=', '%s///e')
-    call PFCall('s:SilentDel', '\%(^>>>> ORIGINAL \|^==== THEIRS\|^==== YOURS \|^<<<<$\)')
+    call SilentSubstitute('^==== THEIRS \_.\{-}\%(^<<<<$\)\@=', '%s///e')
+    call SilentDelete('\%(^>>>> ORIGINAL \|^==== THEIRS\|^==== YOURS \|^<<<<$\)')
     call SetupScratchBuffer()
     setlocal nomodifiable
     diffthis
@@ -205,9 +230,9 @@ function! s:ShowConflicts()
     exec 'vsplit' curFile.'.Theirs'
     silent! exec 'read' curFile
     1delete _
-    call PFCall('s:SilentSub', '^>>>> ORIGINAL \_.\{-}\%(^==== THEIRS \)\@=', '%s///e')
-    call PFCall('s:SilentSub', '^==== YOURS \_.\{-}\%(^<<<<$\)\@=', '%s///e')
-    call PFCall('s:SilentDel', '\%(^>>>> ORIGINAL \|^==== THEIRS\|^==== YOURS \|^<<<<$\)')
+    call SilentSubstitute('^>>>> ORIGINAL \_.\{-}\%(^==== THEIRS \)\@=', '%s///e')
+    call SilentSubstitute('^==== YOURS \_.\{-}\%(^<<<<$\)\@=', '%s///e')
+    call SilentDelete('\%(^>>>> ORIGINAL \|^==== THEIRS\|^==== YOURS \|^<<<<$\)')
     call SetupScratchBuffer()
     setlocal nomodifiable
     diffthis
@@ -215,20 +240,24 @@ function! s:ShowConflicts()
     exec 'vsplit' curFile.'.Yours'
     silent! exec 'read' curFile
     1delete _
-    call PFCall('s:SilentSub', '^>>>> ORIGINAL \_.\{-}\%(^==== YOURS \)\@=', '%s///e')
-    call PFCall('s:SilentDel', '\%(^>>>> ORIGINAL \|^==== THEIRS\|^==== YOURS \|^<<<<$\)')
+    call SilentSubstitute('^>>>> ORIGINAL \_.\{-}\%(^==== YOURS \)\@=', '%s///e')
+    call SilentDelete('\%(^>>>> ORIGINAL \|^==== THEIRS\|^==== YOURS \|^<<<<$\)')
     call SetupScratchBuffer()
     setlocal buftype=
     setlocal nomodified
     call PFCall('s:PFSetupBufAutoCommand', expand('%'), 'BufWriteCmd',
-          \ ':if confirm("Do you want to accept the changes in \"".expand("%")'.
-          \              '."\"?", "&Yes\n&No", 2, "Question") == 1 | w! '.
-          \              curFile . ' | '.
-          \   'endif')
+          \ ':call '.s:myScriptId."SaveYours('".curFile."')", 1)
     diffthis
   finally
     let &splitright = _splitright
   endtry
+endfunction
+
+function! s:SaveYours(orgFile)
+  if confirm('Do you want to accept the changes in "'.expand("%:p:t").'"?',
+        \ "&Yes\n&No", 2, "Question") == 1
+    exec 'w!' a:orgFile
+  endif
 endfunction
 " ShowConflicts }}}
 
