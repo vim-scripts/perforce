@@ -1,0 +1,15 @@
+This is a mirror of http://www.vim.org/scripts/script.php?script_id=240
+
+PLEASE READ THE INSTALL SECTION COMPLETELY.
+
+This is a fairly complete integration with the perforce version control system for the most commanly used operations, including many administrative commands. It includes a great menu that is modelled very close to the p4win (the perforce GUI client) and is quite extensive.
+
+---------------------------------------------------------------------------------------------------------------------------------------------------
+Lately, I am not finding enough time to add features to this, so if anybody is interested to help me add new features or even take over the responsibility, you are very much welcome.
+---------------------------------------------------------------------------------------------------------------------------------------------------
+
+Install the files as described in the installation section below and read and type ":h perforce.txt" for help on using the plugin.
+
+If you find any problems please report them to me. If you happen to add new features or fix any problems, I would appreciate if you send me in the diff. This will speed up the future enhancements (there is a lot more that can be done) and also benefit all the script users.
+
+Search_key_words: perforce scm source control interface p4 p4d p4win multvals genutils Hari Krishna Dara
