@@ -1,9 +1,9 @@
 " perforce.vim: Interface with p4 command.
 " Author: Hari Krishna <hari_vim@yahoo.com>
-" Last Modified: 18-Mar-2002 @ 15:53
+" Last Modified: 20-Mar-2002 @ 18:40
 " Created:       not sure, but sometime before 20-Apr-2001
 " Requires: Vim-6.0 or higher, genutils.vim(1.0.15), multvals.vim(2.1.2)
-" Version: 1.1.15
+" Version: 1.1.17
 " Usage: 
 "   - Adds commands and menus (if enabled) to execute perforce commands. There
 "     are commands defined for most used perforce commands such as 'edit' (PE),
@@ -104,7 +104,6 @@
 "     
 "
 " TODO:
-"   Clear syntax for properties window. 
 "   Sort change lists and show those that are by the current client and others
 "     separately. 
 "   Navigating back to the previous help window doesn't preserve the position,
@@ -115,8 +114,9 @@
 "     operations. 
 "   In filelist view, select the files to be operated upon. 
 "   It will be nice to reuse help windows for all the help commands.
-"   Define a syntax file for perforce syntax. May be one for the help window
-"     too to highlight the perforce help keywords.
+"   POpened should take in a branch name to show the opened files under the
+"     branch (-b branchname). Also a way to open only of specified type such
+"     as add, edit, delete (-t ?).
 "   How can I avoid prompting for checkout when the current vim session is in
 "     view mode (-R option) ???
 "   Allow file names to be passed into PSubmit command. 
@@ -131,6 +131,8 @@
 "   Something to enable/disable and switch between basic and expanded menus
 "     will be good.
 "   The list specific menus should be disabled unless you are in that window. 
+"   A command to add/remove preset, which will also add it to the menu. 
+"   If there are spaces in the arguments, is it still going to work? 
 "   Verify that the autocommands are not leaking.
 "   Backup/Restore commands for opened files.
 
@@ -775,7 +777,7 @@ endfunction
 
 function! s:SetupFileBrowse(outputType)
   if s:StartBufSetup(a:outputType)
-    set ft=vim " This seems to show some decent syntax highlighting.
+    set ft=perforce
     " For now, assume that a new window is created and we are in the new window.
     exec "setlocal includeexpr=" . s:myScriptId . "ConvertToLocalPath(v:fname)"
 
@@ -842,7 +844,7 @@ function! s:PFstat(outputType, ...)
   exec "let err = s:PFIF(1, " . a:outputType . ", 1, 'fstat', " .
         \ argumentString . ")"
   if !err && s:StartBufSetup(a:outputType)
-    set ft=vim " TODO: should be perforce.
+    set ft=perforce
     call s:EndBufSetup(a:outputType)
   endif
 endfunction
@@ -1132,7 +1134,7 @@ function! s:PSubmit(outputType, ...)
   if s:p4Arguments == ""
     call s:ResetP4Vars()
     let s:p4Command = "submit"
-    let s:p4WinName = "P4 submit"
+    let s:p4WinName = "P4\ submit"
 
     call s:PFImpl(a:outputType, "", 2, s:p4SubmitTemplate)
     $
@@ -1164,7 +1166,7 @@ function! s:PFilelog(outputType, ...)
   exec "let err = s:PFIF(1, a:outputType, 1, 'filelog', " . argumentString . ")"
 
   if !err && s:StartBufSetup(a:outputType)
-    set ft=vim " This seems to show some decent syntax highlighting for now.
+    set ft=perforce
     silent! nunmap <buffer> D " No meaning for delete.
     delcommand PItemDelete
     silent! nunmap <buffer> O " No meaning for open/edit.
@@ -1284,6 +1286,7 @@ function! s:InteractiveCommand(outputType, commandName, commandType,
     if a:pattern != "" && search(a:pattern, 'w') != 0
       normal! zz
     endif
+    set ft=perforce
 
     call s:EndBufSetup(a:outputType)
   endif
@@ -1373,7 +1376,7 @@ function! s:PFIF(scriptOrigin, outputType, defaultToCurrentFile, commandName,
 
   if s:p4Command == 'help' 
     " Use simple window name for all the help commands.
-    let s:p4WinName = 'P4 help'
+    let s:p4WinName = "P4\ help"
   endif
 
   let err = s:PFImpl(a:outputType, s:p4CommandPrefix, 0, "")
@@ -1387,6 +1390,7 @@ function! s:PFIF(scriptOrigin, outputType, defaultToCurrentFile, commandName,
     if s:getCommandItemHandler(s:p4Command) != ""
       call s:SetupSelectItem()
     endif
+    set ft=perforce
 
     call s:EndBufSetup(a:outputType)
   endif
@@ -1413,7 +1417,7 @@ function! s:SelectHelp()
   call s:ResetP4Vars()
   let s:p4Command = "help"
   let s:p4Arguments = expand("<cword>")
-  let s:p4WinName = "P4 help"
+  let s:p4WinName = "P4\ help"
 
   setlocal modifiable
   " I could call PW() but that doesn't set the buffer name correctly.
@@ -1774,7 +1778,8 @@ function! s:ParseOptions(...)
     if match(winArg, '\.\.\.$') != -1
       let winArg = winArg . '/'
     endif
-    let s:p4WinName = s:p4WinName . ' ' . winArg
+    let winArg = escape(winArg, ' ')
+    let s:p4WinName = s:p4WinName . '\ ' . winArg
     let i = i + 1
   endwhile
 endfunction
@@ -1913,8 +1918,8 @@ function! s:PFSetupBufAutoClean(p4WinName)
   aug Perforce
   " Just in case the autocommands are leaking, this will curtail the leak a
   "   little bit.
-  exec "au! BufWinLeave " . escape(a:p4WinName, ' ')
-  exec "au BufWinLeave " . escape(a:p4WinName, ' ') .
+  exec "au! BufWinLeave " . a:p4WinName
+  exec "au BufWinLeave " . a:p4WinName .
         \ " :call <SID>PFExecBufClean('" . a:p4WinName . "')"
   aug END
 endfunction
@@ -1932,7 +1937,9 @@ function! s:PFExecBufClean(p4WinName)
   set report=99999
   exec "silent! bwipeout! ". bufNo
   let &report=_report
-  exec "au! BufWinLeave " . escape(a:p4WinName, ' ')
+  aug Perforce
+  exec "au! BufWinLeave " . a:p4WinName
+  aug END
 endfunction
 
 
