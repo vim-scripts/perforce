@@ -1,86 +1,29 @@
 " perforce.vim: Interface with perforce SCM through p4.
-" Author: Hari Krishna <hari_vim at yahoo dot com>
-" Last Change: 21-Oct-2003 @ 19:37
+" Author: Hari Krishna (hari_vim at yahoo dot com)
+" Last Change: 09-Aug-2004 @ 19:19
 " Created:     Sometime before 20-Apr-2001
-" Requires:    Vim-6.2, genutils.vim(1.9), multvals.vim(3.3)
-" Version:     2.0.39
+" Requires:    Vim-6.3, genutils.vim(1.14), multvals.vim(3.6)
+" Version:     3.0.8
 " Licence: This program is free software; you can redistribute it and/or
 "          modify it under the terms of the GNU General Public License.
 "          See http://www.gnu.org/copyleft/gpl.txt 
 " Acknowledgements:
-"     Tom Slee (tslee at ianywhere dot com) for his idea of creating a status
-"	bar with the p4 fstat information (see
-"	  http://www.vim.org/script.php?script_id=167).
+"     See ":help perforce-acknowledgements".
 " Download From:
 "     http://www.vim.org//script.php?script_id=240
 " Usage:
-"     For detailed help, see ":help perforce" or doc/perforce.txt. 
-"
-" Summary Of Features:
-"   See help for details and most up to date information.
-"
-"   Command Line:
-"     Short commands for most used perforce operations:
-"
-"       PE (edit), PR (revert), PA (add), PD (diff), PD2 (diff2),
-"       PP (print), PG (get), PO (opened), PH (help),
-"
-"     Long commands each corresponding to one of the p4 operations:
-"
-"       PAdd, PBranch, PBranches, PChange, PChanges, PClient, PClients,
-"       PDelete, PDepot, PDepots, PDescribe, PDiff, PDiff2, PEdit, PFiles,
-"       PFstat, PGet, PGroup, PGroups, PHave, PHelp, PIntegrate, PJob, PJobs,
-"       PJobspec, PLabel, PLabels, PLabelsync, PLock, POpened, PPrint,
-"       PReopen, PResolve, PRevert, PSubmit, PSync, PUnlock, PUser, PUsers,
-"       PWhere
-"
-"     Special commands which don't have an equivalent p4 command:
-"
-"       E (command to open a file from a different codeline),
-"       PRefreshActivePane (to refresh the current p4 window),
-"       PRefreshFileStatus (to refresh the current file status),
-"       PFSettings (to display and change the values of different settings).
-"
-"   Commandline Mode Maps:
-"       <C-X><C-P> - to insert the current file from a different codeline.
-"	<C-X><C-I> - to get the current list item on the command line (in the
-"		     relevant p4 windows only)
-"
-"   Normal Mode Maps:
-"       O    - open/edit current item (all list views),
-"       <2-LeftMouse> or
-"       <CR> - describe current item (all list views).
-"       D    - delete current item (in file list),
-"              diff current file (in filelog).
-"       S    - sync to the current version (in filelog) .
-"       o    - list opened files in the current change list(in changes list).
-"       C    - describe current change list (in filelog or changes list).
-"              open current change (in file list).
-"       P    - print properties of the current file (in file list).
-"       R    - revert current file (in file list).
-"       S    - submit current change (in changes list).
-"
-"   Menus:
-"       "Perforce" menu group in the main and Popup menus if enabled.
-"
-"   Settings:
-"       p4CmdPath, p4Port, p4User, p4Client, p4Password, p4DefaultOptions,
-"       p4ClientRoot, p4EnableRuler, p4RulerWidth, p4EnableActiveStatus,
-"       p4ASIgnoreDefPattern, p4ASIgnoreUsrPattern, p4OptimizeActiveStatus,
-"       p4UseGUIDialogs, p4PromptToCheckout, p4DefaultListSize,
-"       p4DefaultDiffOptions, p4EnableMenu, p4UseExpandedMenu,
-"       p4EnablePopupMenu, p4UseExpandedPopupMenu, p4Presets,
-"       p4MaxLinesInDialog, p4CheckOutDefault, p4SortSettings, p4TempDir,
-"       p4SplitCommand, p4UseVimDiff2
-"
+"     For detailed help, see ":help perforce" or read doc/perforce.txt. 
 "
 " TODO: {{{
-"   - If there is a call to confirm() when it is in silent!, the message
-"     doesn't show up.
-"   - After pressing A to start autocheckout the cursor is wrongly placed.
-"
-"   - I can have another scriptOrigin type that allows passing the
-"     argumentString as it is from the handlers to PFIF().
+"   - Should the client returned by g:p4CurPresetExpr be made permanent?
+"   - curPresetExpr can't support password, so how is the expression going to
+"     change password?
+"   - If you actually use python to execute, you may be able to display the
+"     output incrementally.
+"   - There seems to be a problem with 'autoread' change leaking. Not sure if
+"     we explicitly set it somewhere, check if we are using try block.
+"   - Buffer local autocommads are pretty useful for perforce plugin, send
+"     feedback.
 "   - Verify that the buffers/autocommands are not leaking.
 " TODO }}}
 "
@@ -91,10 +34,13 @@
 "     arguments as if they were typed in by user, they get sent to p4 as they
 "     are, with incorrect number of back-slashes.
 "   - When issuing sub-commands, we should remember to use the s:p4Options
-"     that was passed to the main command, or the user will see incorrect
-"     behavior or at the worst, errors.
+"     that was passed to the main command (unless the main command already
+"     generated a new window, in which case the original s:p4Options are
+"     remembered through b:p4Options and automatically reused for the
+"     subcommands), or the user will see incorrect behavior or at the worst,
+"     errors.
 "   - The p4FullCmd now can have double-quotes surrounding each of the
-"     individual arguments, if the shell is cmd.exe or command.com, so while
+"     individual arguments if the shell is cmd.exe or command.com, so while
 "     manipulating it directly, we need to use "\?.
 "   - With the new mode of scriptOrigin=2, the changes done to the s:p4*
 "     variables will not get reflected in the s:p4WinName, unless there is
@@ -106,10 +52,12 @@
 "   - Wherever we normally expect a depot name, we should use the s:p4Depot
 "     instead of hardcoded 'depot'. We should also consider the client name
 "     here.
-"   - If checktime is called from inside an autocommand execution (which is
-"     the case for auto checkout), the checktime may be delayed until the
-"     execution is over. So we can't reset s:currentCommand immediately. I am
-"     currently creating a CursorHold autocommand for this.
+"   - Eventhough DefFileChangedShell event handling is now localized, we still
+"     need to depend on s:currentCommand to determine the 'autoread' value,
+"     this is because some other plugin might have already installed a
+"     FileChangedShell event to DefFileChangedShell, resulting in us receiving
+"     callbacks anytime, so we need a variable that has a lifespace only for
+"     the duration of the execution of p4 commands?
 "   - We need to pass special characters such as <space>, *, ?, [, (, &, |, ', $
 "     and " to p4 without getting interpreted by the shell. We may have to use
 "     appropriate quotes around the characters when the shell treats them
@@ -121,22 +69,22 @@
 "     executed (not sure if this is same for all of the variations possible: 
 "     ":[{range}][read|write]!cmd | filter" and "system()"):
 "     For :! command 
-"	On Windoze+native:
-"     	  cmd /c <command>
-"     	On Windoze+sh:
-"     	  sh -c "<command>"
-"     	On Unix+sh:
-"	  sh -c (<command>) 
+"       On Windoze+native:
+"         cmd /c <command>
+"       On Windoze+sh:
+"         sh -c "<command>"
+"       On Unix+sh:
+"         sh -c (<command>) 
 "   - By the time we parse arguments, we protect all the back-slashes, which
-"     means that we would never see a single-slash.
+"     means that we would never see a single-back-slash.
 "   - Using back-slashes on Cygwin vim is unique and causes E303. This is
 "     because it thinks it is on UNIX where it is not a special character, but
 "     underlying Windows obviously treats it special and so it bails out.
 "   - Using back-slashes on Windows+sh also seems to be different. Somewhere in
 "     the execution line (most probably the path from CreateProcess() to sh,
-"     as it doesn't happen in all other type sof interfaces) consumes one
-"     level of bach-slashes. If it is even number it becomes half, and if it
-"     is odd then the last unparied back-slash is left as it is.
+"     as it doesn't happen in all other types of interfaces) consumes one
+"     level of extra back-slashes. If it is even number it becomes half, and
+"     if it is odd then the last unpaired back-slash is left as it is.
 "   - Some test cases for special character handling:
 "     - PF fstat a\b
 "     - PF fstat a\ b
@@ -144,27 +92,57 @@
 "     - PF fstat a\&b
 "     - PF fstat a\#b
 "     - PF fstat a\|b
-"   - Careful using PFIF(1) from within script, as it doesn't redirect the
+"   - Careful using s:PFIF(1) from within script, as it doesn't redirect the
 "     call to the corresponding handler (if any).
-" END NOTES }}} 
+"   - Careful using ":PF" command from within handlers, especially if you are
+"     executing the same s:p4Command again as it will result in a recursion.
+"   - The outputType's -2 and -1 are local to the s:PFrangeIF() interface, the
+"     actual s:PFImpl() or any other methods shouldn't know anything about it.
+"     Which is why this outputType should be used only for those commands that
+"     don't have a handler. Besides this scheme will not even work if a
+"     handler exists, as the outputType will get permanently set to 4 by the
+"     time it gets redirected back to s:PFrangeIF() through the handler. (If
+"     this should ever be a requirement, we will need another state variable
+"     called s:orgOutputType.)
+"   - Be careful to pass argument 0 to s:PopP4Context() whenever the logical
+"     p4 operation ends, to avoid getting the s:errCode carried over. This is
+"     currently taken care of for all the known recursive or ignorable error
+"     cases.
+"   - We need to use s:outputType as much as possible, not a:outputType, which
+"     is there only to pass it on to s:ParseOptions(). After calling s:PFIF()
+"     the outputType is established in s:outputType.
+"   - s:errCode is reset by ParseOptions(). For cases that Push and Pop context
+"     even before the first call to ParseOptions() (such as the
+"     s:GetClientInfo() function), we have to check for s:errCode before we
+"     pop context, or we will just carry on an error code from a previous bad
+"     run (applies to mostly utility functions).
+" END NOTES }}}
 
-if exists("loaded_perforce")
+if exists('loaded_perforce')
   finish
 endif
-if v:version < 602
-  echomsg "You need Vim 6.2 to run this version of perforce.vim."
+if v:version < 603
+  echomsg 'Perforce: You need at least Vim 6.3'
   finish
 endif
-let loaded_perforce=1
 
 
 " We need these scripts at the time of initialization itself.
-if !exists("loaded_multvals")
+if !exists('loaded_multvals')
   runtime plugin/multvals.vim
 endif
-if !exists("loaded_genutils")
+if !exists('loaded_multvals') || loaded_multvals < 306
+  echomsg 'perforce: You need a newer version of multvals.vim plugin'
+  finish
+endif
+if !exists('loaded_genutils')
   runtime plugin/genutils.vim
 endif
+if !exists('loaded_genutils') || loaded_genutils < 114
+  echomsg 'perforce: You need a newer version of genutils.vim plugin'
+  finish
+endif
+let loaded_perforce=300
 
 " Make sure line-continuations won't cause any problem. This will be restored
 "   at the end
@@ -193,25 +171,13 @@ function! s:Initialize() " {{{
 
 " User Options {{{
 
+let firstTimeInit = 1
 if !exists("s:p4CmdPath") " The first-time only, initialize with defaults.
   let s:p4CmdPath = "p4"
   let s:clientRoot = ""
   let s:defaultListSize='100'
   let s:defaultDiffOptions=''
-  let s:p4Client = $P4CLIENT
-  if exists("$P4USER") && $P4USER != ''
-    let s:p4User = $P4USER
-  elseif OnMS() && exists("$USERNAME")
-    let s:p4User = $USERNAME
-  elseif exists("$LOGNAME")
-    let s:p4User = $LOGNAME
-  elseif exists("$USERNAME") " Happens if you are on cygwin too.
-    let s:p4User = $USERNAME
-  else
-    let s:p4User = ''
-  endif
-  let s:p4Port = $P4PORT
-  let s:p4Password = $P4PASSWD
+  let s:p4DefaultPreset = -1
   let s:p4Depot = 'depot'
   let s:p4Presets = ""
   let s:defaultOptions = ""
@@ -231,17 +197,22 @@ if !exists("s:p4CmdPath") " The first-time only, initialize with defaults.
   let s:checkOutDefault = 2
   let s:sortSettings = 1
   " Probably safer than reading $TEMP.
-  let s:tempDir = substitute(tempname(), '[/\\][^/\\]\+$', '', '')
+  let s:tempDir = fnamemodify(tempname(), ':h')
   let s:splitCommand = "split"
   let s:enableFileChangedShell = 1
   let s:useVimDiff2 = 0
-  let s:p4HideOnBufHidden = 0
+  let s:p4BufHidden = 'wipe'
   let s:autoread = 1
   if OnMS()
-    let s:fileLauncher = 'start rundll32 url.dll,FileProtocolHandler'
+    let s:fileLauncher = 'start rundll32 SHELL32.DLL,ShellExec_RunDLL'
   else
     let s:fileLauncher = ''
   endif
+  let s:curPresetExpr = ''
+  let s:curDirExpr = ''
+  let s:useClientViewMap = 1
+else
+  let firstTimeInit = 0
 endif
 
 function! s:CondDefSetting(globalName, settingName, ...)
@@ -256,11 +227,8 @@ call s:CondDefSetting('g:p4CmdPath', 's:p4CmdPath')
 call s:CondDefSetting('g:p4ClientRoot', 's:clientRoot', 'CleanupFileName(g:p4ClientRoot)')
 call s:CondDefSetting('g:p4DefaultListSize', 's:defaultListSize')
 call s:CondDefSetting('g:p4DefaultDiffOptions', 's:defaultDiffOptions')
-call s:CondDefSetting('g:p4Client', 's:p4Client')
-call s:CondDefSetting('g:p4User', 's:p4User')
-call s:CondDefSetting('g:p4Port', 's:p4Port')
-call s:CondDefSetting('g:p4Password', 's:p4Password')
-if exists('g:p4Depot') && g:p4Depot != ''
+call s:CondDefSetting('g:p4DefaultPreset', 's:p4DefaultPreset')
+if exists('g:p4Depot') && g:p4Depot !~# s:EMPTY_STR
   call s:CondDefSetting('g:p4Depot', 's:p4Depot')
 endif
 call s:CondDefSetting('g:p4Presets', 's:p4Presets')
@@ -285,10 +253,18 @@ call s:CondDefSetting('g:p4TempDir', 's:tempDir',
 call s:CondDefSetting('g:p4SplitCommand', 's:splitCommand')
 call s:CondDefSetting('g:p4EnableFileChangedShell', 's:enableFileChangedShell')
 call s:CondDefSetting('g:p4UseVimDiff2', 's:useVimDiff2')
-call s:CondDefSetting('g:p4HideOnBufHidden', 's:p4HideOnBufHidden')
+call s:CondDefSetting('g:p4BufHidden', 's:p4BufHidden')
 call s:CondDefSetting('g:p4Autoread', 's:autoread')
 call s:CondDefSetting('g:p4FileLauncher', 's:fileLauncher')
+call s:CondDefSetting('g:p4CurPresetExpr', 's:curPresetExpr')
+call s:CondDefSetting('g:p4CurDirExpr', 's:curDirExpr')
+call s:CondDefSetting('g:p4UseClientViewMap', 's:useClientViewMap')
 delfunction s:CondDefSetting
+
+if firstTimeInit && s:p4DefaultPreset != -1 &&
+      \ s:p4DefaultPreset.'' !~# s:EMPTY_STR
+  call s:PFSwitch(0, s:p4DefaultPreset)
+endif
 
 " This is a one time initialization. Assume the user already has his preferred
 "   rulerformat set (he is anyway going to do it through his .vimrc file which
@@ -305,7 +281,7 @@ if s:rulerEnabled
   if &rulerformat != ""
     if match(&rulerformat, '^%\d\+') == 0
       let orgWidth = substitute(&rulerformat, '^%\(\d\+\)(.*$',
-	    \ '\1', '')
+            \ '\1', '')
       let orgRuler = substitute(&rulerformat, '^%\d\+(\(.*\)%)$', '\1', '')
     else
       let orgWidth = strlen(&rulerformat) " Approximate.
@@ -316,7 +292,7 @@ if s:rulerEnabled
     let orgRuler = '%l,%c%V%=%5(%p%%%)'
   endif
   let &rulerformat = '%' . (orgWidth + s:rulerWidth) .  '(%{' . s:myScriptId .
-	\ 'P4RulerStatus()}%=' . orgRuler . '%)'
+        \ 'P4RulerStatus()}%=' . orgRuler . '%)'
 else
   if exists("s:orgRulerFormat")
     let &rulerformat = s:orgRulerFormat
@@ -325,16 +301,10 @@ else
   endif
 endif
 
-
-if s:enableFileChangedShell
-  call DefFCShellInstall()
-else
-  call DefFCShellUninstall()
-endif
-
 aug P4ClientRoot
   au!
-  if s:clientRoot == ""
+  if s:clientRoot =~# s:EMPTY_STR || s:p4Client =~# s:EMPTY_STR ||
+        \ s:p4User =~# s:EMPTY_STR
     if s:activeStatusEnabled
       au VimEnter * call <SID>GetClientInfo() | au! P4ClientRoot
     else
@@ -357,408 +327,169 @@ aug END
 
 " Command definitions {{{
 
-command! -nargs=* -complete=file PP :call <SID>printHdlr(0, 0, <f-args>)
-command! -nargs=* -complete=file PPrint :call <SID>printHdlr(0, 0, <f-args>)
-command! -nargs=* -complete=file PD :call <SID>diffHdlr(0, 0, <f-args>)
-command! -nargs=* -complete=file PDiff :call <SID>diffHdlr(0, 0, <f-args>)
-command! -nargs=* -complete=file PEdit :call <SID>PFIF(0, 20, "edit", <f-args>)
-command! -nargs=* -complete=file PE :call <SID>PFIF(0, 20, "edit", <f-args>)
-command! -nargs=* -complete=file PReopen
-      \ :call <SID>PFIF(0, 20, "reopen", <f-args>)
-command! -nargs=* -complete=file PAdd :call <SID>PFIF(0, 20, "add", <f-args>)
-command! -nargs=* -complete=file PA :call <SID>PFIF(0, 20, "add", <f-args>)
-command! -nargs=* -complete=file PDelete
-      \ :call <SID>PFIF(0, 20, "delete", <f-args>)
-command! -nargs=* -complete=file PLock :call <SID>PFIF(0, 20, "lock", <f-args>)
-command! -nargs=* -complete=file PUnlock
-      \ :call <SID>PFIF(0, 20, "unlock", <f-args>)
-command! -nargs=* -complete=file PRevert
-      \ :call <SID>PFIF(0, 20, "revert", <f-args>)
-command! -nargs=* -complete=file PR :call <SID>PFIF(0, 20, "revert", <f-args>)
-command! -nargs=* -complete=file PSync :call <SID>PFIF(0, 20, "sync", <f-args>)
-command! -nargs=* -complete=file PG :call <SID>PFIF(0, 20, "get", <f-args>)
-command! -nargs=* -complete=file PGet :call <SID>PFIF(0, 20, "get", <f-args>)
-command! -nargs=* -complete=file POpened
+command! -nargs=* -complete=custom,<SID>PFComplete PP
+      \ :call <SID>printHdlr(0, 0, <f-args>)
+command! -nargs=* -complete=custom,<SID>PFComplete PPrint
+      \ :call <SID>printHdlr(0, 0, <f-args>)
+command! -nargs=* -complete=custom,<SID>PFComplete PD
+      \ :call <SID>diffHdlr(0, 0, <f-args>)
+command! -nargs=* -complete=custom,<SID>PFComplete PDiff
+      \ :call <SID>diffHdlr(0, 0, <f-args>)
+command! -nargs=* -complete=custom,<SID>PFComplete PEdit
+      \ :call <SID>PFIF(0, -2, "edit", <f-args>)
+command! -nargs=* -complete=custom,<SID>PFComplete PE
+      \ :call <SID>PFIF(0, -2, "edit", <f-args>)
+command! -nargs=* -complete=custom,<SID>PFComplete PReopen
+      \ :call <SID>PFIF(0, -2, "reopen", <f-args>)
+command! -nargs=* -complete=custom,<SID>PFComplete PAdd
+      \ :call <SID>PFIF(0, -2, "add", <f-args>)
+command! -nargs=* -complete=custom,<SID>PFComplete PA
+      \ :call <SID>PFIF(0, -2, "add", <f-args>)
+command! -nargs=* -complete=custom,<SID>PFComplete PDelete
+      \ :call <SID>PFIF(0, -2, "delete", <f-args>)
+command! -nargs=* -complete=custom,<SID>PFComplete PLock
+      \ :call <SID>PFIF(0, -2, "lock", <f-args>)
+command! -nargs=* -complete=custom,<SID>PFComplete PUnlock
+      \ :call <SID>PFIF(0, -2, "unlock", <f-args>)
+command! -nargs=* -complete=custom,<SID>PFComplete PRevert
+      \ :call <SID>PFIF(0, -2, "revert", <f-args>)
+command! -nargs=* -complete=custom,<SID>PFComplete PR
+      \ :call <SID>PFIF(0, -2, "revert", <f-args>)
+command! -nargs=* -complete=custom,<SID>PFComplete PSync
+      \ :call <SID>PFIF(0, -2, "sync", <f-args>)
+command! -nargs=* -complete=custom,<SID>PFComplete PG
+      \ :call <SID>PFIF(0, -2, "get", <f-args>)
+command! -nargs=* -complete=custom,<SID>PFComplete PGet
+      \ :call <SID>PFIF(0, -2, "get", <f-args>)
+command! -nargs=* -complete=custom,<SID>PFComplete POpened
       \ :call <SID>PFIF(0, 0, "opened", <f-args>)
-command! -nargs=* -complete=file PO :call <SID>PFIF(0, 0, "opened", <f-args>)
-command! -nargs=* -complete=file PHave :call <SID>PFIF(0, 0, "have", <f-args>)
-command! -nargs=* -complete=file PWhere :call <SID>PFIF(0, 0, "where", <f-args>)
-command! -nargs=* PDescribe :call <SID>describeHdlr(0, 0, <f-args>)
-command! -nargs=* -complete=file PFiles :call <SID>PFIF(0, 0, "files", <f-args>)
-command! -nargs=* -complete=file PLabelsync
+command! -nargs=* -complete=custom,<SID>PFComplete PO
+      \ :call <SID>PFIF(0, 0, "opened", <f-args>)
+command! -nargs=* -complete=custom,<SID>PFComplete PHave
+      \ :call <SID>PFIF(0, 0, "have", <f-args>)
+command! -nargs=* -complete=custom,<SID>PFComplete PWhere
+      \ :call <SID>PFIF(0, 0, "where", <f-args>)
+command! -nargs=* -complete=custom,<SID>PFComplete PDescribe
+      \ :call <SID>describeHdlr(0, 0, <f-args>)
+command! -nargs=* -complete=custom,<SID>PFComplete PFiles
+      \ :call <SID>PFIF(0, 0, "files", <f-args>)
+command! -nargs=* -complete=custom,<SID>PFComplete PLabelsync
       \ :call <SID>PFIF(0, 0, "labelsync", <f-args>)
-command! -nargs=* -complete=file PFilelog :call <SID>filelogHdlr(0, 0, <f-args>)
-command! -nargs=* -complete=file PIntegrate
+command! -nargs=* -complete=custom,<SID>PFComplete PFilelog
+      \ :call <SID>filelogHdlr(0, 0, <f-args>)
+command! -nargs=* -complete=custom,<SID>PFComplete PIntegrate
       \ :call <SID>PFIF(0, 0, "integrate", <f-args>)
-command! -nargs=* -complete=file PD2 :call <SID>diff2Hdlr(0, 0, <f-args>)
-command! -nargs=* -complete=file PDiff2 :call <SID>diff2Hdlr(0, 0, <f-args>)
-command! -nargs=* -complete=file PFstat :call <SID>PFIF(0, 0, "fstat", <f-args>)
-command! -nargs=* PH :call <SID>helpHdlr(0, 0, <f-args>)
-command! -nargs=* PHelp :call <SID>helpHdlr(0, 0, <f-args>)
+command! -nargs=* -complete=custom,<SID>PFComplete PD2
+      \ :call <SID>diff2Hdlr(0, 0, <f-args>)
+command! -nargs=* -complete=custom,<SID>PFComplete PDiff2
+      \ :call <SID>diff2Hdlr(0, 0, <f-args>)
+command! -nargs=* -complete=custom,<SID>PFComplete PFstat
+      \ :call <SID>PFIF(0, 0, "fstat", <f-args>)
+command! -nargs=* -complete=custom,<SID>PFComplete PH
+      \ :call <SID>helpHdlr(0, 0, <f-args>)
+command! -nargs=* -complete=custom,<SID>PFComplete PHelp
+      \ :call <SID>helpHdlr(0, 0, <f-args>)
 
 
 """ Some list view commands.
-command! -nargs=* -complete=file PChanges :call <SID>changesHdlr(0, 0, <f-args>)
-command! -nargs=* PBranches :call <SID>PFIF(0, 0, "branches", <f-args>)
-command! -nargs=* -complete=file PLabels :call <SID>labelsHdlr(0, 0, <f-args>)
-command! -nargs=* PClients :call <SID>clientsHdlr(0, 0, <f-args>)
-command! -nargs=* PUsers :call <SID>PFIF(0, 0, "users", <f-args>)
-command! -nargs=* -complete=file PJobs :call <SID>PFIF(0, 0, "jobs", <f-args>)
-command! -nargs=* PDepots :call <SID>PFIF(0, 0, "depots", <f-args>)
-command! -nargs=* PGroups :call <SID>PFIF(0, 0, "groups", <f-args>)
+command! -nargs=* -complete=custom,<SID>PFComplete PChanges
+      \ :call <SID>changesHdlr(0, 0, <f-args>)
+command! -nargs=* -complete=custom,<SID>PFComplete PBranches
+      \ :call <SID>PFIF(0, 0, "branches", <f-args>)
+command! -nargs=* -complete=custom,<SID>PFComplete PLabels
+      \ :call <SID>labelsHdlr(0, 0, <f-args>)
+command! -nargs=* -complete=custom,<SID>PFComplete PClients
+      \ :call <SID>clientsHdlr(0, 0, <f-args>)
+command! -nargs=* -complete=custom,<SID>PFComplete PUsers
+      \ :call <SID>PFIF(0, 0, "users", <f-args>)
+command! -nargs=* -complete=custom,<SID>PFComplete PJobs
+      \ :call <SID>PFIF(0, 0, "jobs", <f-args>)
+command! -nargs=* -complete=custom,<SID>PFComplete PDepots
+      \ :call <SID>PFIF(0, 0, "depots", <f-args>)
+command! -nargs=* -complete=custom,<SID>PFComplete PGroups
+      \ :call <SID>PFIF(0, 0, "groups", <f-args>)
 
 
 """ The following support some p4 operations that normally involve some
 """   interaction with the user (they are more than just shortcuts).
 
-command! -nargs=* -complete=file PChange :call <SID>changeHdlr(0, 0, <f-args>)
-command! -nargs=* PBranch :call <SID>PFIF(0, 0, "branch", <f-args>)
-command! -nargs=* PLabel :call <SID>PFIF(0, 0, "label", <f-args>)
-command! -nargs=* PClient :call <SID>PFIF(0, 0, "client", <f-args>)
-command! -nargs=* PUser :call <SID>PFIF(0, 0, "user", <f-args>)
-command! -nargs=* PJob :call <SID>PFIF(0, 0, "job", <f-args>)
-command! -nargs=* PJobspec :call <SID>PFIF(0, 0, "jobspec", <f-args>)
-command! -nargs=* PDepot :call <SID>PFIF(0, 0, "depot", <f-args>)
-command! -nargs=* PGroup :call <SID>PFIF(0, 0, "group", <f-args>)
-command! -nargs=* -complete=file PSubmit :call <SID>submitHdlr(0, 0, <f-args>)
-command! -nargs=* -complete=file PResolve :call <SID>resolveHdlr(0, 0, <f-args>)
+command! -nargs=* -complete=custom,<SID>PFComplete PChange
+      \ :call <SID>changeHdlr(0, 0, <f-args>)
+command! -nargs=* -complete=custom,<SID>PFComplete PBranch
+      \ :call <SID>PFIF(0, 0, "branch", <f-args>)
+command! -nargs=* -complete=custom,<SID>PFComplete PLabel
+      \ :call <SID>PFIF(0, 0, "label", <f-args>)
+command! -nargs=* -complete=custom,<SID>PFComplete PClient
+      \ :call <SID>PFIF(0, 0, "client", <f-args>)
+command! -nargs=* -complete=custom,<SID>PFComplete PUser
+      \ :call <SID>PFIF(0, 0, "user", <f-args>)
+command! -nargs=* -complete=custom,<SID>PFComplete PJob
+      \ :call <SID>PFIF(0, 0, "job", <f-args>)
+command! -nargs=* -complete=custom,<SID>PFComplete PJobspec
+      \ :call <SID>PFIF(0, 0, "jobspec", <f-args>)
+command! -nargs=* -complete=custom,<SID>PFComplete PDepot
+      \ :call <SID>PFIF(0, 0, "depot", <f-args>)
+command! -nargs=* -complete=custom,<SID>PFComplete PGroup
+      \ :call <SID>PFIF(0, 0, "group", <f-args>)
+command! -nargs=* -complete=custom,<SID>PFComplete PSubmit
+      \ :call <SID>submitHdlr(0, 0, <f-args>)
+command! -nargs=* -complete=custom,<SID>PFComplete PResolve
+      \ :call <SID>resolveHdlr(0, 0, <f-args>)
 
 " Some built-in commands.
-command! -nargs=? -complete=file PVDiff :call <SID>PFIF(0, 0, "vdiff", <f-args>)
-command! -nargs=? -complete=file PVDiff2
+command! -nargs=? -complete=custom,<SID>PFComplete PVDiff
+      \ :call <SID>PFIF(0, 0, "vdiff", <f-args>)
+command! -nargs=* -complete=custom,<SID>PFComplete PVDiff2
       \ :call <SID>PFIF(0, 0, "vdiff2", <f-args>)
 
 """ Other utility commands.
 
 command! -nargs=* -complete=file E :call <SID>PFOpenAltFile(0, <f-args>)
 command! -nargs=* -complete=file ES :call <SID>PFOpenAltFile(2, <f-args>)
-command! -nargs=* PSwitch :call <SID>PSwitch(<f-args>)
-command! -nargs=* PSwitchPortClientUser :call <SID>SwitchPortClientUser()
-command! -nargs=0 PRefreshActivePane :call <SID>PRefreshActivePane()
-command! -nargs=0 PRefreshFileStatus :call <SID>GetFileStatus(0, 1)
-command! -nargs=0 PToggleCkOut :call <SID>ToggleCheckOutPrompt(1)
-command! -nargs=0 PFSettings :call <SID>PFSettings()
-command! -nargs=0 PDiffOff :call CleanDiffOptions()
-command! -nargs=? PWipeoutBufs :call <SID>WipeoutP4Buffers(<f-args>)
-command! -nargs=* -complete=file -range=% PF
-      \ <line1>,<line2>call <SID>PFIF(0, -1, <f-args>)
-command! -nargs=* -complete=file PFRaw :call <SID>PFRaw(0, <f-args>)
+command! -nargs=* -complete=custom,<SID>PFSwitchComplete PFSwitch
+      \ :call <SID>PFSwitch(1, <f-args>)
+command! -nargs=* PFSwitchPortClientUser :call <SID>SwitchPortClientUser()
+command! -nargs=0 PFRefreshActivePane :call <SID>PFRefreshActivePane()
+command! -nargs=0 PFRefreshFileStatus :call <SID>GetFileStatus(0, 1)
+command! -nargs=0 PFToggleCkOut :call <SID>ToggleCheckOutPrompt(1)
+command! -nargs=* -complete=custom,<SID>PFSettingsComplete PFS :PFSettings <args>
+command! -nargs=* -complete=custom,<SID>PFSettingsComplete PFSettings
+      \ :call <SID>PFSettings(<f-args>)
+command! -nargs=0 PFDiffOff :call CleanDiffOptions()
+command! -nargs=? PFWipeoutBufs :call <SID>WipeoutP4Buffers(<f-args>)
+"command! -nargs=* -complete=file -range=% PF
+command! -nargs=* -complete=custom,<SID>PFComplete -range=% PF
+      \ :call <SID>PFrangeIF(<line1>, <line2>, 0, -2, <f-args>)
+command! -nargs=* -complete=file PFRaw :call <SID>PFRaw(<f-args>)
 command! -nargs=* -complete=file -range=% PW
-      \ :<line1>,<line2>call <SID>PW(0, <f-args>)
-command! -nargs=0 PLastMessage :call <SID>LastMessage()
-command! -nargs=1 PExecCmd :call <SID>PExecCmd(<q-args>)
-
-" Some generic mappings.
-if maparg('<C-X><C-P>', 'c') == ""
-  cnoremap <C-X><C-P> <C-R>=<SID>PFOpenAltFile(1)<CR>
-endif
+      \ :call <SID>PW(<line1>, <line2>, 0, <f-args>)
+command! -nargs=0 PFLastMessage :call <SID>LastMessage()
+command! -nargs=0 PFBugReport :runtime perforce/perforcebugrep.vim
+command! -nargs=0 PFUpdateViews :call <SID>UpdateViewMappings()
 
 " New normal mode mappings.
 if (! exists("no_plugin_maps") || ! no_plugin_maps) &&
       \ (! exists("no_perforce_maps") || ! no_execmap_maps)
-  nnoremap <silent> <Leader>prap :PRefreshActivePane<cr>
-  nnoremap <silent> <Leader>prfs :PRefreshFileStatus<cr>
+  nnoremap <silent> <Leader>prap :PFRefreshActivePane<cr>
+  nnoremap <silent> <Leader>prfs :PFRefreshFileStatus<cr>
+
+  " Some generic mappings.
+  if maparg('<C-X><C-P>', 'c') == ""
+    cnoremap <C-X><C-P> <C-R>=<SID>PFOpenAltFile(1)<CR>
+  endif
 endif
 
 " Command definitions }}}
 
-
-" CreateMenu {{{
-function! s:CreateMenu(sub, expanded)
-  if ! a:expanded
-    let fileGroup = '.'
-  else
-    let fileGroup = '.&File.'
-  endif
-  exec 'amenu <silent> ' . a:sub . '&Perforce' . fileGroup . '&Add :PA<CR>'
-  exec 'amenu <silent> ' . a:sub . '&Perforce' . fileGroup . 'S&ync :PSync<CR>'
-  exec 'amenu <silent> ' . a:sub . '&Perforce' . fileGroup . '&Edit :PE<CR>'
-  exec 'amenu <silent> ' . a:sub . '&Perforce' . fileGroup . '-Sep1- :'
-  exec 'amenu <silent> ' . a:sub . '&Perforce' . fileGroup .
-        \ '&Delete :PDelete<CR>'
-  exec 'amenu <silent> ' . a:sub . '&Perforce' . fileGroup . '&Revert :PR<CR>'
-  exec 'amenu <silent> ' . a:sub . '&Perforce' . fileGroup . '-Sep2- :'
-  exec 'amenu <silent> ' . a:sub . '&Perforce' . fileGroup . 'Loc&k :PLock<CR>'
-  exec 'amenu <silent> ' . a:sub . '&Perforce' . fileGroup .
-        \ 'U&nlock :PUnlock<CR>'
-  exec 'amenu <silent> ' . a:sub . '&Perforce' . fileGroup . '-Sep3- :'
-  exec 'amenu <silent> ' . a:sub . '&Perforce' . fileGroup . '&Diff :PD<CR>'
-  exec 'amenu <silent> ' . a:sub . '&Perforce' . fileGroup . 'Diff&2 :PD2<CR>'
-  exec 'amenu <silent> ' . a:sub . '&Perforce' . fileGroup .
-        \ 'Revision\ &History :PFilelog<CR>'
-  exec 'amenu <silent> ' . a:sub . '&Perforce' . fileGroup . 'Propert&ies ' .
-        \ ':PFstat -C<CR>'
-  exec 'amenu <silent> ' . a:sub . '&Perforce' . fileGroup . '&Print :PP<CR>'
-  exec 'amenu <silent> ' . a:sub . '&Perforce' . fileGroup . '-Sep4- :'
-  if a:expanded
-    exec 'amenu <silent> ' . a:sub . '&Perforce.&File.' .
-          \ 'Resol&ve.Accept\ &Their\ Changes<Tab>resolve\ -at ' .
-          \ ':PResolve -at<CR>'
-    exec 'amenu <silent> ' . a:sub . '&Perforce.&File.' .
-          \ 'Resol&ve.Accept\ &Your\ Changes<Tab>resolve\ -ay :PResolve -ay<CR>'
-    exec 'amenu <silent> ' . a:sub . '&Perforce.&File.' .
-          \ 'Resol&ve.&Automatic\ Resolve<Tab>resolve\ -am :PResolve -am<CR>'
-    exec 'amenu <silent> ' . a:sub . '&Perforce.&File.' .
-          \ 'Resol&ve.&Safe\ Resolve<Tab>resolve\ -as :PResolve -as<CR>'
-    exec 'amenu <silent> ' . a:sub . '&Perforce.&File.' .
-          \ 'Resol&ve.&Force\ Resolve<Tab>resolve\ -af :PResolve -af<CR>'
-    exec 'amenu <silent> ' . a:sub . '&Perforce.&File.' .
-          \ 'Resol&ve.S&how\ Integrations<Tab>resolve\ -n :PResolve -n<CR>'
-    exec 'amenu <silent> ' . a:sub . '&Perforce.&File.-Sep5- :'
-    exec 'amenu <silent> ' . a:sub . '&Perforce.&File.Sa&ve\ Current\ Spec ' .
-	  \':PExecCmd W<CR>'
-    exec 'amenu <silent> ' . a:sub . '&Perforce.&File.Save\ and\ &Quit\ ' .
-	  \'Current\ Spec :PExecCmd WQ<CR>'
-  endif
-
-  if ! a:expanded
-    exec 'amenu <silent> ' . a:sub . '&Perforce.&Opened\ Files :PO<CR>'
-    exec 'amenu <silent> ' . a:sub . '&Perforce.&Refresh\ Active\ Pane ' .
-          \ ':PRefreshActivePane<CR>'
-    exec 'amenu <silent> ' . a:sub . '&Perforce.-Sep6- :'
-  else
-    exec 'amenu <silent> ' . a:sub .
-          \ '&Perforce.&View.&BranchSpecs :PBranches<CR>'
-    exec 'amenu <silent> ' . a:sub . '&Perforce.&View.&Changelist.' .
-          \ '&Pending\ Changelists :PChanges -s pending<CR>'
-    exec 'amenu <silent> ' . a:sub . '&Perforce.&View.&Changelist.' .
-          \ '&Submitted\ Changelists :PChanges -s submitted<CR>'
-    exec 'amenu <silent> ' . a:sub .
-          \ '&Perforce.&View.Cl&ientSpecs :PClients<CR>'
-    exec 'amenu <silent> ' . a:sub . '&Perforce.&View.&Jobs :PJobs<CR>'
-    exec 'amenu <silent> ' . a:sub . '&Perforce.&View.&Labels :PLabels<CR>'
-    exec 'amenu <silent> ' . a:sub . '&Perforce.&View.&Users :PUsers<CR>'
-    exec 'amenu <silent> ' . a:sub . '&Perforce.&View.&Depots :PDepots<CR>'
-    exec 'amenu <silent> ' . a:sub . '&Perforce.&View.&Opened\ Files :PO<CR>'
-    exec 'amenu <silent> ' . a:sub . '&Perforce.&View.&Refresh\ Active\ Pane ' .
-          \ ':PRefreshActivePane<CR>'
-  endif
-
-  if a:expanded
-    exec 'amenu <silent> ' . a:sub . '&Perforce.&Settings.' .
-          \ '&Switch\ Port\ Client\ User :call <SID>SwitchPortClientUser()<CR>'
-    let nSets = MvNumberOfElements(s:p4Presets, ',')
-    if nSets > 0
-      let index = 0
-      while index < nSets
-        let nextSet = MvElementAt(s:p4Presets, ',', index)
-        exec 'amenu <silent> ' . a:sub . '&Perforce.&Settings.&' . index . '\ '
-              \ . escape(nextSet, ' .') . ' :PSwitch ' . index . '<CR>'
-        let index = index + 1
-      endwhile
-    endif
-  endif
-
-  if ! a:expanded
-    exec 'amenu <silent> ' . a:sub .
-          \ '&Perforce.New\ &Submission\ Template :PSubmit<CR>'
-  else
-    exec 'amenu <silent> ' . a:sub . '&Perforce.&Changelist.&New :PChange<CR>'
-    exec 'amenu <silent> ' . a:sub . '&Perforce.&Changelist.' .
-          \ '&Edit\ Current\ Changelist :PExecCmd PItemOpen<CR>'
-    exec 'amenu <silent> ' . a:sub . '&Perforce.&Changelist.' .
-          \ 'Descri&be\ Current\ Changelist :PExecCmd PItemDescribe<CR>'
-    exec 'amenu <silent> ' . a:sub . '&Perforce.&Changelist.' .
-          \ '&Delete\ Current\ Changelist :PExecCmd PItemDelete<CR>'
-    exec 'amenu <silent> ' . a:sub . '&Perforce.&Changelist.' .
-          \ 'New\ &Submission\ Template :PSubmit<CR>'
-    exec 'amenu <silent> ' . a:sub . '&Perforce.&Changelist.-Sep- :'
-    exec 'amenu <silent> ' . a:sub . '&Perforce.&Changelist.' .
-          \ 'View\ &Pending\ Changelists :PChanges -s pending<CR>'
-    exec 'amenu <silent> ' . a:sub . '&Perforce.&Changelist.' .
-          \ '&View\ Submitted\ Changelists :PChanges -s submitted<CR>'
-  endif
-
-  if ! a:expanded
-    exec 'amenu <silent> ' . a:sub . '&Perforce.&Branch :PBranch<CR>'
-  else
-    exec 'amenu <silent> ' . a:sub . '&Perforce.&Branch.&New :PBranch<CR>'
-    exec 'amenu <silent> ' . a:sub . '&Perforce.&Branch.' .
-          \ '&Edit\ Current\ BranchSpec :PExecCmd PItemOpen<CR>'
-    exec 'amenu <silent> ' . a:sub . '&Perforce.&Branch.' .
-          \ 'Descri&be\ Current\ BranchSpec :PExecCmd PItemDescribe<CR>'
-    exec 'amenu <silent> ' . a:sub . '&Perforce.&Branch.' .
-          \ '&Delete\ Current\ BranchSpec :PExecCmd PItemDelete<CR>'
-    exec 'amenu <silent> ' . a:sub . '&Perforce.&Branch.-Sep- :'
-    exec 'amenu <silent> ' . a:sub .
-          \ '&Perforce.&Branch.&View\ BranchSpecs :PBranches<CR>'
-  endif
-
-  if ! a:expanded
-    exec 'amenu <silent> ' . a:sub . '&Perforce.&Label :PLabel<CR>'
-  else
-    exec 'amenu <silent> ' . a:sub . '&Perforce.&Label.&New :PLabel<CR>'
-    exec 'amenu <silent> ' . a:sub . '&Perforce.&Label.' .
-          \ '&Edit\ Current\ LabelSpec :PExecCmd PItemOpen<CR>'
-    exec 'amenu <silent> ' . a:sub . '&Perforce.&Label.' .
-          \ 'Descri&be\ Current\ LabelSpec :PExecCmd PItemDescribe<CR>'
-    exec 'amenu <silent> ' . a:sub . '&Perforce.&Label.' .
-          \ '&Delete\ Current\ LabelSpec :PExecCmd PItemDelete<CR>'
-    exec 'amenu <silent> ' . a:sub . '&Perforce.&Label.-Sep1- :'
-    exec 'amenu <silent> ' . a:sub . '&Perforce.&Label.' .
-          \ '&Sync\ Client\ ' . s:p4Client . '\ to\ Current\ Label ' .
-          \ ':PExecCmd PLabelsSyncClient<CR>'
-    exec 'amenu <silent> ' . a:sub . '&Perforce.&Label.' .
-          \ '&Replace\ Files\ in\ Current\ Label\ with\ Client\ ' . s:p4Client .
-          \ '\ files ' . ':PExecCmd PLabelsSyncLabel<CR>'
-    exec 'amenu <silent> ' . a:sub . '&Perforce.&Label.-Sep2- :'
-    exec 'amenu <silent> ' . a:sub .
-          \ '&Perforce.&Label.&View\ Labels :PLabels<CR>'
-  endif
-
-  if ! a:expanded
-    exec 'amenu <silent> ' . a:sub . '&Perforce.Cl&ient :PClient<CR>'
-  else
-    exec 'amenu <silent> ' . a:sub .
-          \ '&Perforce.Cl&ient.&New :PClient +P<CR>'
-    exec 'amenu <silent> ' . a:sub . '&Perforce.Cl&ient.' .
-          \ '&Edit\ Current\ ClientSpec :PExecCmd PItemOpen<CR>'
-    exec 'amenu <silent> ' . a:sub . '&Perforce.Cl&ient.' .
-          \ 'Descri&be\ Current\ ClientSpec :PExecCmd PItemDescribe<CR>'
-    exec 'amenu <silent> ' . a:sub . '&Perforce.Cl&ient.' .
-          \ '&Delete\ Current\ ClientSpec :PExecCmd PItemDelete<CR>'
-    exec 'amenu <silent> ' . a:sub . '&Perforce.' .
-          \ 'Cl&ient.&Edit\ ' . escape(s:p4Client, ' ') . ' :PClient<CR>'
-    exec 'amenu <silent> ' . a:sub . '&Perforce.Cl&ient.-Sep- :'
-    exec 'amenu <silent> ' . a:sub . '&Perforce.Cl&ient.&Switch\ to\ Current' .
-          \ '\ Client :exec "PSwitch ' . s:p4Port .
-          \ ' " . <SID>GetCurrentItem()<CR>'
-    exec 'amenu <silent> ' . a:sub .
-          \ '&Perforce.Cl&ient.&View\ ClientSpecs :PClients<CR>'
-  endif
-
-  if ! a:expanded
-    exec 'amenu <silent> ' . a:sub . '&Perforce.&User :PUser<CR>'
-  else
-    exec 'amenu <silent> ' . a:sub .
-          \ '&Perforce.&User.&New :PUser +P<CR>'
-    exec 'amenu <silent> ' . a:sub . '&Perforce.&User.' .
-          \ '&Edit\ Current\ UserSpec :PExecCmd PItemOpen<CR>'
-    exec 'amenu <silent> ' . a:sub . '&Perforce.&User.' .
-          \ 'Descri&be\ Current\ UserSpec :PExecCmd PItemDescribe<CR>'
-    exec 'amenu <silent> ' . a:sub . '&Perforce.&User.' .
-          \ '&Delete\ Current\ UserSpec :PExecCmd PItemDelete<CR>'
-    exec 'amenu <silent> ' . a:sub .
-          \ '&Perforce.&User.&Edit\ ' . escape(s:p4User, ' ') . ' :PUser<CR>'
-    exec 'amenu <silent> ' . a:sub . '&Perforce.&User.-Sep- :'
-    exec 'amenu <silent> ' . a:sub . '&Perforce.&User.&Switch\ to\ Current' .
-          \ '\ User :exec "PSwitch ' . s:p4Port . ' ' . s:p4Client .
-          \ ' " . <SID>GetCurrentItem()<CR>'
-    exec 'amenu <silent> ' . a:sub .
-          \ '&Perforce.&User.&View\ Users :PUsers<CR>'
-  endif
-
-  if ! a:expanded
-    exec 'amenu <silent> ' . a:sub . '&Perforce.&Job :PJob<CR>'
-  else
-    exec 'amenu <silent> ' . a:sub . '&Perforce.&Job.&New :PJob<CR>'
-    exec 'amenu <silent> ' . a:sub . '&Perforce.&Job.' .
-          \ '&Edit\ Current\ JobSpec :PExecCmd PItemOpen<CR>'
-    exec 'amenu <silent> ' . a:sub . '&Perforce.&Job.' .
-          \ 'Descri&be\ Current\ JobSpec :PExecCmd PItemDescribe<CR>'
-    exec 'amenu <silent> ' . a:sub . '&Perforce.&Job.' .
-          \ '&Delete\ Current\ JobSpec :PExecCmd PItemDelete<CR>'
-    exec 'amenu <silent> ' . a:sub . '&Perforce.&Job.-Sep1- :'
-    exec 'amenu <silent> ' . a:sub . '&Perforce.&Job.&Edit\ Job&Spec ' .
-	  \ ':PJobspec<CR>'
-    exec 'amenu <silent> ' . a:sub . '&Perforce.&Job.-Sep2- :'
-    exec 'amenu <silent> ' . a:sub . '&Perforce.&Job.&View\ Jobs :PJobs<CR>'
-  endif
-
-  if a:expanded
-    exec 'amenu <silent> ' . a:sub . '&Perforce.&Depot.&New :PDepot<CR>'
-    exec 'amenu <silent> ' . a:sub . '&Perforce.&Depot.' .
-          \ '&Edit\ Current\ DepotSpec :PExecCmd PItemOpen<CR>'
-    exec 'amenu <silent> ' . a:sub . '&Perforce.&Depot.' .
-          \ 'Descri&be\ Current\ DepotSpec :PExecCmd PItemDescribe<CR>'
-    exec 'amenu <silent> ' . a:sub . '&Perforce.&Depot.' .
-          \ '&Delete\ Current\ DepotSpec :PExecCmd PItemDelete<CR>'
-    exec 'amenu <silent> ' . a:sub . '&Perforce.&Depot.-Sep- :'
-    exec 'amenu <silent> ' . a:sub .
-          \ '&Perforce.&Depot.&View\ Depots :PDepots<CR>'
-  endif
-
-  if ! a:expanded
-    exec 'amenu <silent> ' . a:sub .
-          \ '&Perforce.Open\ Current\ File\ From\ A&nother\ Branch :E<CR>'
-  else
-    exec 'amenu <silent> ' . a:sub .
-          \ '&Perforce.&Tools.Open\ Current\ File\ From\ A&nother\ Branch ' .
-	  \ ':E<CR>'
-  endif
-
-  if ! a:expanded
-    exec 'amenu <silent> ' . a:sub . '&Perforce.-Sep7- :'
-    exec 'amenu <silent> ' . a:sub . '&Perforce.Sa&ve\ Current\ Spec ' .
-	  \':PExecCmd W<CR>'
-    exec 'amenu <silent> ' . a:sub . '&Perforce.Save\ and\ &Quit\ ' .
-	  \'Current\ Spec :PExecCmd WQ<CR>'
-  endif
-
-  exec 'amenu <silent> ' . a:sub . '&Perforce.-Sep8- :'
-  exec 'amenu <silent> ' . a:sub . '&Perforce.Re-Initial&ze :PFInitialize<CR>'
-  if ! a:expanded
-    exec 'amenu <silent> ' . a:sub . '&Perforce.&Help :PH<CR>'
-  else
-    exec 'amenu <silent> ' . a:sub . '&Perforce.&Help.&General :PH<CR>'
-    exec 'amenu <silent> ' . a:sub . '&Perforce.&Help.&Simple :PH simple<CR>'
-    exec 'amenu <silent> ' . a:sub .
-          \ '&Perforce.&Help.&Commands :PH commands<CR>'
-    exec 'amenu <silent> ' . a:sub .
-          \ '&Perforce.&Help.&Environment :PH environment<CR>'
-    exec 'amenu <silent> ' . a:sub .
-          \ '&Perforce.&Help.&Filetypes :PH filetypes<CR>'
-    exec 'amenu <silent> ' . a:sub . '&Perforce.&Help.&Jobview :PH jobview<CR>'
-    exec 'amenu <silent> ' . a:sub .
-          \ '&Perforce.&Help.&Revisions :PH revisions<CR>'
-    exec 'amenu <silent> ' . a:sub . '&Perforce.&Help.&Usage :PH usage<CR>'
-    exec 'amenu <silent> ' . a:sub . '&Perforce.&Help.&Views :PH views<CR>'
-  endif
-endfunction " }}}
-
-"
-" Add menu entries if user wants.
-"
-
-silent! unmenu Perforce
-silent! unmenu! Perforce
-if s:menuEnabled
-  call s:CreateMenu('', s:useExpandedMenu)
-endif
-
-silent! unmenu PopUp.Perforce
-silent! unmenu! PopUp.Perforce
-if s:popupMenuEnabled
-  call s:CreateMenu('PopUp.', s:useExpandedPopupMenu)
-endif
-let v:errmsg='' " The above unmenu's could have set this variable.
-
-function! s:ToggleCheckOutPrompt(interactive)
-  aug P4CheckOut
-  au!
-  if s:promptToCheckout
-    let s:promptToCheckout = 0
-  else
-    let s:promptToCheckout = 1
-    au FileChangedRO * nested :call <SID>CheckOutFile()
-  endif
-  aug END
-  if a:interactive
-    echomsg "PromptToCheckout is now " . ((s:promptToCheckout) ? "enabled." :
-	  \ "disabled.")
-  endif
-endfunction
+" Give a chance for the perforcemenu.vim to reconfigure the menu. Allow users
+"   to add their own stuff.
+runtime! perforce/perforcemenu.vim
+let v:errmsg = ''
 
 let s:promptToCheckout = ! s:promptToCheckout
 call s:ToggleCheckOutPrompt(0)
 
-" Delete unnecessary stuff.
-delfunction s:CreateMenu
-
 endfunction " s:Initialize }}}
- 
-" Do the actual initialization.
-call s:Initialize()
 
 """ BEGIN: One-time initialization of some script variables {{{
 let s:lastMsg = ''
@@ -789,15 +520,17 @@ let s:specialChars{'|'} = 'P'
 " A lot of metadata on perforce command syntax and handling.
 "
 
-let s:p4KnownCmds = "add,admin,branch,branches,change,changes,client,clients," .
-      \ "counter,counters,delete,depot,depots,describe,diff,diff2,dirs,edit," .
-      \ "filelog,files,fix,fixes,flush,fstat,get,group,groups,have,help,info," .
-      \ "integrate,integrated,job,jobs,jobspec,label,labels,labelsync,lock," .
-      \ "logger,obliterate,opened,passwd,print,protect,rename,reopen,resolve," .
-      \ "resolved,revert,review,reviews,set,submit,sync,triggers,typemap," .
-      \ "unlock,user,users,verify,where,"
+let s:p4KnownCmds = "add,admin,annotate,branch,branches,change,changes," .
+      \ "client,clients,counter,counters,delete,depot,depots,describe,diff," .
+      \ "diff2,dirs,edit,filelog,files,fix,fixes,flush,fstat,get,group," .
+      \ "groups,have,help,info,integrate,integrated,job,jobs,jobspec,label," .
+      \ "labels,labelsync,lock,logger,monitor,obliterate,opened,passwd,print," .
+      \ "protect,rename,reopen,resolve,resolved,revert,review,reviews,set," .
+      \ "submit,sync,triggers,typemap,unlock,user,users,verify,where,"
 " Add some built-in commands to this list.
-let s:p4KnownCmds = s:p4KnownCmds . "vdiff,vdiff2,"
+let s:builtinCmds = "vdiff,vdiff2,"
+let s:allCommands = s:p4KnownCmds . s:builtinCmds
+let s:p4KnownCmdsCompStr = ''
 
 " Map between the option and the commands that reqire us to pass an argument
 "   with this option.
@@ -818,6 +551,17 @@ let s:p4OptCmdMap{'S'} = 'set'
 " These built-in options require us to pass an argument. These options start
 "   with a '+'.
 let s:biOptCmdMap{'c'} = 'diff'
+
+" Map the commands with short name to their long versions.
+let s:shortCmdMap{'p'} = 'print'
+let s:shortCmdMap{'d'} = 'diff'
+let s:shortCmdMap{'e'} = 'edit'
+let s:shortCmdMap{'a'} = 'add'
+let s:shortCmdMap{'r'} = 'revert'
+let s:shortCmdMap{'g'} = 'get'
+let s:shortCmdMap{'o'} = 'open'
+let s:shortCmdMap{'d2'} = 'diff2'
+let s:shortCmdMap{'h'} = 'help'
 
 
 " NOTE: The current file is used as the default argument, only when the
@@ -864,8 +608,11 @@ let s:navigateCmds = 'help,'
 let s:limitListCmds = 'filelog,jobs,changes,'
 " These commands take the diff option -dx.
 let s:diffCmds = 'describe,diff,diff2,'
-" For the following commands, the default output mode is 20.
-let s:outputType20Cmds = 'add,delete,edit,get,lock,reopen,revert,sync,unlock,'
+" For the following commands, we should limit the output lines in the dialog
+"   to s:maxLinesInDialog. If it exceeds, we should switch to showing a
+"   dialog.
+let s:limitLinesInDlgCmds =
+      \ 'add,delete,edit,get,lock,reopen,revert,sync,unlock,'
 
 " If there is a confirm message, then PFIF() will prompt user before
 "   continuing with the run.
@@ -875,14 +622,15 @@ let s:confirmMsgs{'submit'} = "This will commit the changelist to the depot." .
       \ "\n Do you want to continue?"
 
 " List of the global variable names of the user configurable settings.
-let s:settings = 'User,Client,Password,Port,ClientRoot,CmdPath,Presets,' .
+let s:settings = 'ClientRoot,CmdPath,Presets,' .
       \ 'DefaultOptions,DefaultDiffOptions,EnableMenu,EnablePopupMenu,' .
       \ 'UseExpandedMenu,UseExpandedPopupMenu,EnableRuler,RulerWidth,' .
       \ 'DefaultListSize,EnableActiveStatus,OptimizeActiveStatus,' .
       \ 'ASIgnoreDefPattern,ASIgnoreUsrPattern,PromptToCheckout,' .
       \ 'CheckOutDefault,UseGUIDialogs,MaxLinesInDialog,SortSettings,' .
       \ 'TempDir,SplitCommand,UseVimDiff2,EnableFileChangedShell,' .
-      \ 'HideOnBufHidden,Depot,Autoread'
+      \ 'BufHidden,Depot,Autoread,UseClientViewMap'
+let s:settingsCompStr = ''
 
 " Map of global variable name to the local variable that are different than
 "   their global counterparts.
@@ -895,30 +643,57 @@ let s:settingsMap{'ASIgnoreUsrPattern'} = 'ignoreUsrPattern'
 
 let s:helpWinName = 'P4\ help'
 
-let s:SPACE_AS_SEP = '\\\@<!\%(\\\\\)* ' " Unprotected space.
-let s:EMPTY_STR = '^\s*$'
+" Unprotected space.
+let s:SPACE_AS_SEP = MvCrUnProtectedCharsPattern(' ')
+let s:EMPTY_STR = '^\_s*$'
+
+if !exists('s:p4Client') || s:p4Client =~# s:EMPTY_STR
+  let s:p4Client = $P4CLIENT
+endif
+if !exists('s:p4User') || s:p4User =~# s:EMPTY_STR
+  if exists("$P4USER") && $P4USER !~# s:EMPTY_STR
+    let s:p4User = $P4USER
+  elseif OnMS() && exists("$USERNAME")
+    let s:p4User = $USERNAME
+  elseif exists("$LOGNAME")
+    let s:p4User = $LOGNAME
+  elseif exists("$USERNAME") " Happens if you are on cygwin too.
+    let s:p4User = $USERNAME
+  else
+    let s:p4User = ''
+  endif
+endif
+if !exists('s:p4Port') || s:p4Port =~# s:EMPTY_STR
+  let s:p4Port = $P4PORT
+endif
+let s:p4Password = $P4PASSWD
 
 let s:CM_RUN = 'run' | let s:CM_FILTER = 'filter' | let s:CM_DISPLAY = 'display'
 let s:CM_PIPE = 'pipe'
 
-let s:changesExpr  = "matchstr(getline(\".\"), '" . '^Change \zs\d\+\ze ' . "')"
-let s:branchesExpr = "matchstr(getline(\".\"), '" . '^Branch \zs[^ ]\+\ze ' .
-      \ "')"
-let s:labelsExpr   = "matchstr(getline(\".\"), '" . '^Label \zs[^ ]\+\ze ' .
-      \ "')"
-let s:clientsExpr  = "matchstr(getline(\".\"), '" . '^Client \zs[^ ]\+\ze ' .
-      \ "')"
+let s:changesExpr  = "matchstr(getline(\".\"), '" .
+      \ '^Change \zs\d\+\ze ' . "')"
+let s:branchesExpr = "matchstr(getline(\".\"), '" .
+      \ '^Branch \zs[^ ]\+\ze ' . "')"
+let s:labelsExpr   = "matchstr(getline(\".\"), '" .
+      \ '^Label \zs[^ ]\+\ze ' . "')"
+let s:clientsExpr  = "matchstr(getline(\".\"), '" .
+      \ '^Client \zs[^ ]\+\ze ' . "')"
 let s:usersExpr    = "matchstr(getline(\".\"), '" .
       \ '^[^ ]\+\ze <[^@>]\+@[^>]\+> ([^)]\+)' . "')"
-let s:jobsExpr     = "matchstr(getline(\".\"), '" . '^[^ ]\+\ze on ' . "')"
-let s:depotsExpr   = "matchstr(getline(\".\"), '" . '^Depot \zs[^ ]\+\ze ' .
-      \ "')"
-let s:openedExpr   = "s:ConvertToLocalPath(s:GetCurrentDepotFile(line('.')))"
-let s:describeExpr = "s:DescribeGetCurrentItem()"
-let s:filesExpr    = "s:ConvertToLocalPath(s:GetCurrentDepotFile(line('.')))"
-let s:haveExpr     = "s:ConvertToLocalPath(s:GetCurrentDepotFile(line('.')))"
-let s:filelogExpr  = "s:GetCurrentDepotFile(line('.'))"
-let s:groupsExpr   = "expand('<cword>')"
+let s:jobsExpr     = "matchstr(getline(\".\"), '" .
+      \ '^[^ ]\+\ze on ' . "')"
+let s:depotsExpr   = "matchstr(getline(\".\"), '" .
+      \ '^Depot \zs[^ ]\+\ze ' . "')"
+let s:describeExpr = 's:DescribeGetCurrentItem()'
+let s:filelogExpr  = 's:GetCurrentDepotFile(line("."))'
+let s:groupsExpr   = 'expand("<cword>")'
+
+let s:fileBrowseExpr = 's:ConvertToLocalPath(s:GetCurrentDepotFile(line(".")))'
+let s:openedExpr   = s:fileBrowseExpr
+let s:filesExpr    = s:fileBrowseExpr
+let s:haveExpr     = s:fileBrowseExpr
+let s:integrateExpr = s:fileBrowseExpr
 
 " If an explicit handler is defined, then it will override the default rule of
 "   finding the command with the singular form.
@@ -938,6 +713,9 @@ let s:p4Contexts = ""
 let s:p4ContextSeparator = ":::"
 let s:p4ContextItemSeparator = ";;;"
 
+let s:fromDepotMapping = ''
+let s:toDepotMapping = ''
+
 aug Perforce | aug END " Define autocommand group.
 call AddToFCShellPre(s:myScriptId . 'FileChangedShell')
 
@@ -951,13 +729,13 @@ call AddToFCShellPre(s:myScriptId . 'FileChangedShell')
 function! s:printHdlr(scriptOrigin, outputType, ...)
   exec MakeArgumentString()
   exec "let retVal = s:PFIF(a:scriptOrigin + 1, a:outputType, 'print', " .
-	\ argumentString . ")"
+        \ argumentString . ")"
 
-  if s:StartBufSetup(a:outputType)
-    let undo  = 0
+  if s:StartBufSetup()
+    let undo = 0
     " The first line printed by p4 for non-q operation causes vim to misjudge
     " the filetype.
-    if getline(1) =~ '//[^#]\+#\d\+ - '
+    if getline(1) =~# '//[^#]\+#\d\+ - '
       setlocal modifiable
       let firstLine = getline(1)
       silent! 1delete _
@@ -975,7 +753,7 @@ function! s:printHdlr(scriptOrigin, outputType, ...)
       setlocal nomodifiable
     endif
 
-    call s:EndBufSetup(a:outputType)
+    call s:EndBufSetup()
   endif
   return retVal
 endfunction
@@ -983,21 +761,21 @@ endfunction
 function! s:describeHdlr(scriptOrigin, outputType, ...)
   exec MakeArgumentString()
   if !a:scriptOrigin
-    exec "call s:ParseOptionsIF(1, line('$'), 1, 'describe', " .
-	  \ argumentString . ")"
+    exec "call s:ParseOptionsIF(1, line('$'), 1, a:outputType, 'describe', " .
+          \ argumentString . ")"
   endif
   " If -s doesn't exist, and user doesn't intent to see a diff, then let us
   "   add -s option. In any case he can press enter on the <SHOW DIFFS> to see
   "   it later.
-  if	  ! MvContainsElement(s:p4CmdOptions, s:SPACE_AS_SEP, '-s', ' ') &&
-	\ ! MvContainsPattern(s:p4CmdOptions, s:SPACE_AS_SEP, '-d.', ' ')
+  if      ! MvContainsElement(s:p4CmdOptions, s:SPACE_AS_SEP, '-s', ' ') &&
+        \ ! MvContainsPattern(s:p4CmdOptions, s:SPACE_AS_SEP, '-d.', ' ')
     let s:p4CmdOptions = s:p4CmdOptions . ' -s'
     let s:p4WinName = s:MakeWindowName() " Adjust window name.
   endif
 
   exec "let retVal = s:PFIF(2, a:outputType, 'describe')"
-  if s:StartBufSetup(a:outputType) && getline(1) !~ ' - no such changelist'
-    call s:SetupFileBrowse(a:outputType)
+  if s:StartBufSetup() && getline(1) !~# ' - no such changelist'
+    call s:SetupFileBrowse()
     if MvContainsElement(s:p4CmdOptions, s:SPACE_AS_SEP, '-s', ' ')
       setlocal modifiable
       call append('$', "\t<SHOW DIFFS>")
@@ -1006,7 +784,7 @@ function! s:describeHdlr(scriptOrigin, outputType, ...)
       call s:SetupDiff()
     endif
 
-    call s:EndBufSetup(a:outputType)
+    call s:EndBufSetup()
   endif
   return retVal
 endfunction
@@ -1014,37 +792,103 @@ endfunction
 function! s:diffHdlr(scriptOrigin, outputType, ...)
   exec MakeArgumentString()
   if !a:scriptOrigin
-    exec "call s:ParseOptionsIF(1, line('$'), 1, 'diff', " .
-	  \ argumentString . ")"
+    exec "call s:ParseOptionsIF(1, line('$'), 1, a:outputType, 'diff', " .
+          \ argumentString . ")"
   endif
 
   " If a change number is specified in the diff, we need to handle it
   "   ourselves, as p4 doesn't understand this.
-  let changeIdx = MvIndexOfPattern(s:p4CmdOptions, s:SPACE_AS_SEP,
-	\ '+c\s\+\d\+', ' ') " Searches including change no.
-  if changeIdx != -1 " If a change no. is specified.
+  " FIXME: Take care of protected space.
+  let changeNo = matchstr(s:p4CmdOptions, '++c\s\+\zs\%(\d\+\|\<default\>\)')
+  if changeNo != '' " If a change no. is specified.
     call s:PushP4Context()
-    let s:p4Command = 'opened'
-    let s:p4CmdOptions = '-c ' . MvElementAt(s:p4CmdOptions, s:SPACE_AS_SEP,
-	  \ changeIdx + 1, ' ')
-    let retVal = s:PFIF(2, a:outputType, 'opened')
-    if s:errCode != 0
-      return
-    endif
-    if getline(1) !~ 'ile(s) not opened on this client\.'
-      setl modifiable
-      call s:SilentSub('#.*', '%s///e')
-      call s:PeekP4Context() " Bring in a copy.
-      exec "PF -x - " . s:p4Options . " ++f diff"
-    endif
-    call s:PopP4Context()
+    try
+      let s:p4Options = '++T ++N ' . s:p4Options " Testmode.
+      let retVal = s:PFIF(2, a:outputType, 'diff') " Opens window.
+      if s:errCode == 0
+        setlocal modifiable
+        exec '.PF ++f opened -c' changeNo
+      endif
+    finally
+      let cntxtStr = s:PopP4Context()
+    endtry
   else
-    exec "let retVal = s:PFIF(2, a:outputType, 'diff')"
+    " Any + option is treated like a signal to run external diff.
+    let externalDiffOptExists = (MvIndexOfPattern(s:p4CmdOptions,
+          \ s:SPACE_AS_SEP, '+\S\+', ' ') != -1)
+    if externalDiffOptExists
+      if MvNumberOfElements(s:p4Arguments, s:SPACE_AS_SEP, ' ') > 1
+        return s:SyntaxError('Option +U can not be used with multiple files.')
+      endif
+      let needsPop = 0
+      try
+        let _p4Options = s:p4Options
+        let s:p4Options = '++T ' . s:p4Options " Testmode, just open the window.
+        let retVal = s:PFIF(2, 0, 'diff')
+        let s:p4Options = _p4Options
+        if s:errCode != 0
+          return
+        endif
+        call s:PushP4Context() | let needsPop = 1
+        PW print -q
+        if s:errCode == 0
+          setlocal modifiable
+          let fileName = s:ConvertToLocalPath(s:p4Arguments)
+          call s:PeekP4Context()
+          " Remove all the non-external options and process external options.
+          " Sample:
+          " '-x +width=10 -du -y +U=20 -z -a -db +tabsize=4'
+          "   to
+          " '--width=10 -U 20 --tabsize=4'
+          let diffOpts = substitute(s:p4CmdOptions,
+                \ '\s*\([-+]\)\([^= ]\+\)\%(=\(\%(\\\@<!\%(\\\\\)*\\ \|\S\)\+\)\)\?\s*',
+                \ '\=(submatch(1) == "-") ? '.
+                \    '"" : '.
+                \    '(strlen(submatch(2)) > 1 ? '.
+                \     '("--".submatch(2).'.
+                \      '(submatch(3) != "" ? "=".submatch(3) : "")) : '.
+                \     '("-".submatch(2).'.
+                \      '(submatch(3) != "" ? " ".submatch(3) : "")))." "',
+                \ 'g')
+          if getbufvar(bufnr('#'), '&ff') ==# 'dos'
+            setlocal ff=dos
+          endif
+          silent! exec '%!'.
+                \ EscapeCommand('diff', diffOpts.' -- - '.fileName, '')
+          if v:shell_error > 1
+            call s:EchoMessage('Error executing external diff command. '.
+                  \ 'Verify that GNU (or a compatible) diff is in your path.',
+                  \ 'ERROR')
+            return ''
+          endif
+          call SilentSubstitute("\<CR>$", '%s///')
+          call SilentSubstitute('^--- -', '1s;;--- '.s:ConvertToDepotPath(fileName))
+          1
+        endif
+      finally
+        setlocal nomodifiable
+        if needsPop
+          call s:PopP4Context()
+        endif
+      endtry
+    else
+      exec "let retVal = s:PFIF(2, exists('$P4DIFF') ? 5 : a:outputType, " .
+            \ "'diff')"
+    endif
   endif
-  if s:StartBufSetup(a:outputType)
+
+  if s:StartBufSetup()
     call s:SetupDiff()
 
-    call s:EndBufSetup(a:outputType)
+    if changeNo != '' && getline(1) !~# 'ile(s) not opened on this client\.'
+      setl modifiable
+      call SilentSubstitute('#.*', '%s///e')
+      call s:SetP4ContextVars(cntxtStr) " Restore original diff context.
+      call s:PFIF(1, 0, '-x', '-', '++f', '++n', 'diff')
+      setl nomodifiable
+    endif
+
+    call s:EndBufSetup()
   endif
   return retVal
 endfunction
@@ -1052,29 +896,17 @@ endfunction
 function! s:diff2Hdlr(scriptOrigin, outputType, ...)
   exec MakeArgumentString()
   if !a:scriptOrigin
-    exec "call s:ParseOptionsIF(1, line('$'), 1, 'diff2', " .
-	  \ argumentString . ")"
+    exec "call s:ParseOptionsIF(1, line('$'), 1, a:outputType, 'diff2', " .
+          \ argumentString . ")"
   endif
 
-  " The pattern takes care of ignoring protected spaces as separators.
-  let nArgs = MvNumberOfElements(s:p4Arguments, s:SPACE_AS_SEP, ' ')
-  if nArgs < 2
-    if nArgs == 0
-      let file = s:EscapeFileName(expand('%'))
-    else
-      let file = s:p4Arguments
-    endif
-    let ver1 = s:PromptFor(0, s:useGUIDialogs, "Version1? ", '')
-    let ver2 = s:PromptFor(0, s:useGUIDialogs, "Version2? ", '')
-    let s:p4Arguments = file . s:MakeRevStr(ver1) . " " . file .
-	  \ s:MakeRevStr(ver2)
-  endif
+  let s:p4Arguments = s:GetDiff2Args()
 
-  exec "let retVal = s:PFIF(2, a:outputType, 'diff2')"
-  if s:StartBufSetup(a:outputType)
+  exec "let retVal = s:PFIF(2, exists('$P4DIFF') ? 5 : a:outputType, 'diff2')"
+  if s:StartBufSetup()
     call s:SetupDiff()
 
-    call s:EndBufSetup(a:outputType)
+    call s:EndBufSetup()
   endif
   return retVal
 endfunction
@@ -1082,40 +914,44 @@ endfunction
 function! s:changeHdlrImpl(outputType)
   let _p4Arguments = ''
   " If argument(s) is not a number...
-  if s:p4Arguments != '' && match(s:p4Arguments, '^\d\+$') == -1
+  if s:p4Arguments !~# s:EMPTY_STR && match(s:p4Arguments, '^\d\+$') == -1
     let _p4Arguments = s:p4Arguments
     let s:p4Arguments = '' " Let a new changelist be created.
   endif
   let retVal = s:PFIF(2, a:outputType, 'change')
-  if s:errCode == 0 && s:StartBufSetup(a:outputType) ||
-	\ s:commandMode == s:CM_FILTER
+  if s:errCode == 0 && (s:StartBufSetup() ||
+        \ s:commandMode ==# s:CM_FILTER)
     let p4Options = ''
-    if s:p4Options != ''
+    if s:p4Options !~# s:EMPTY_STR
       let p4Options = CreateArgString(s:p4Options, s:SPACE_AS_SEP, ' ') .
-	    \ ', '
+            \ ', '
     endif
-    if _p4Arguments != ''
+    if _p4Arguments !~# s:EMPTY_STR
       if search('^Files:', 'w') && line('.') != line('$')
-	call SaveHardPosition('PChangeImpl')
-	+
-	call s:PushP4Context()
-	exec '.,$call s:PFIF(1, 0, ' . p4Options . '"++f", "opened", "-c", ' .
-	      \ '"default", ' . CreateArgString(_p4Arguments, ' ') . ')'
-	call s:PopP4Context()
+        call SaveHardPosition('PChangeImpl')
+        +
+        call s:PushP4Context()
+        try
+          exec 'call s:PFrangeIF(line("."), line("$"), 1, 0, ' .
+                \ p4Options . '"++f", "opened", "-c", ' . '"default", '
+                \ . CreateArgString(_p4Arguments, ' ') . ')'
+        finally
+          call s:PopP4Context()
+        endtry
 
-	if s:errCode == 0
-	  call s:SilentSub('^', '.,$s//\t/e')
-	  call RestoreHardPosition('PChangeImpl')
-	  call s:SilentSub('#\d\+ - \(\S\+\) .*$', '.,$s//\t# \1/e')
-	endif
-	call RestoreHardPosition('PChangeImpl')
-	call ResetHardPosition('PChangeImpl')
+        if s:errCode == 0
+          call SilentSubstitute('^', '.,$s//\t/e')
+          call RestoreHardPosition('PChangeImpl')
+          call SilentSubstitute('#\d\+ - \(\S\+\) .*$', '.,$s//\t# \1/e')
+        endif
+        call RestoreHardPosition('PChangeImpl')
+        call ResetHardPosition('PChangeImpl')
       endif
     endif
 
-    call s:EndBufSetup(a:outputType)
+    call s:EndBufSetup()
     setl nomodified
-    if _p4Arguments != '' && &cmdheight > 1
+    if _p4Arguments !~# s:EMPTY_STR && &cmdheight > 1
       " The message about W and WQ must have gone by now.
       redraw | call s:LastMessage()
     endif
@@ -1126,20 +962,20 @@ endfunction
 function! s:changeHdlr(scriptOrigin, outputType, ...)
   exec MakeArgumentString()
   if !a:scriptOrigin
-    exec "call s:ParseOptionsIF(1, line('$'), 1, 'change', " .
-	  \ argumentString . ")"
+    exec "call s:ParseOptionsIF(1, line('$'), 1, a:outputType, 'change', " .
+          \ argumentString . ")"
   endif
   let retVal = s:changeHdlrImpl(a:outputType)
-  if s:StartBufSetup(a:outputType)
+  if s:StartBufSetup()
     let p4Options = ''
-    if s:p4Options != ''
+    if s:p4Options !~# s:EMPTY_STR
       let p4Options = CreateArgString(s:p4Options, s:SPACE_AS_SEP, ' ') .
-	    \ ', '
+            \ ', '
     endif
     exec 'command! -buffer -nargs=* PChangeSubmit :call <SID>W(0, ' .
-	  \ p4Options . '"submit", <f-args>)'
+          \ p4Options . '"submit", <f-args>)'
 
-    call s:EndBufSetup(a:outputType)
+    call s:EndBufSetup()
   endif
   return retVal
 endfunction
@@ -1148,8 +984,8 @@ endfunction
 function! s:submitHdlr(scriptOrigin, outputType, ...)
   exec MakeArgumentString()
   if !a:scriptOrigin
-    exec "call s:ParseOptionsIF(1, line('$'), 1, 'submit', " .
-	  \ argumentString . ")"
+    exec "call s:ParseOptionsIF(1, line('$'), 1, a:outputType, 'submit', " .
+          \ argumentString . ")"
   endif
 
   if MvContainsElement(s:p4CmdOptions, s:SPACE_AS_SEP, '-c', ' ') == 1
@@ -1157,36 +993,38 @@ function! s:submitHdlr(scriptOrigin, outputType, ...)
     let retVal = s:PFIF(2, a:outputType, 'submit')
   else
     call s:PushP4Context()
-    " This is done just to get the :W and :WQ commands defined properly and
-    "	open the window with a proper name. The actual job is done by the call
-    "	to s:changeHdlrImpl() which is then run in filter mode to avoid the
-    "	side-effects (such as :W and :WQ getting redefined etc.)
-    let s:p4CmdOptions = '+y ' . s:p4CmdOptions " Don't confirm.
-    let s:p4Options = '+t ' . s:p4Options " Testmode.
-    call s:PFIF(2, 0, 'submit')
-    let _newWindowCreated = s:newWindowCreated
-    call s:PeekP4Context()
-    let s:p4CmdOptions = '' " These must be specific to 'submit'.
-    let s:p4Command = 'change'
-    let s:commandMode = s:CM_FILTER | let s:filterRange = '.'
-    let retVal = s:changeHdlrImpl(a:outputType)
-    setlocal nomodified
-    if s:errCode != 0
-      return
-    endif
-    let s:newWindowCreated = _newWindowCreated
-    call s:PopP4Context()
+    try
+      " This is done just to get the :W and :WQ commands defined properly and
+      " open the window with a proper name. The actual job is done by the call
+      " to s:changeHdlrImpl() which is then run in filter mode to avoid the
+      " side-effects (such as :W and :WQ getting overwritten etc.)
+      let s:p4Options = '++y ++T ' . s:p4Options " Don't confirm, and testmode.
+      call s:PFIF(2, 0, 'submit')
+      if s:errCode == 0
+        call s:PeekP4Context()
+        let s:p4CmdOptions = '' " These must be specific to 'submit'.
+        let s:p4Command = 'change'
+        let s:commandMode = s:CM_FILTER | let s:filterRange = '.'
+        let retVal = s:changeHdlrImpl(a:outputType)
+        setlocal nomodified
+        if s:errCode != 0
+          return
+        endif
+       endif
+    finally
+      call s:PopP4Context()
+    endtry
 
-    if s:StartBufSetup(a:outputType)
+    if s:StartBufSetup()
       let p4Options = ''
-      if s:p4Options != ''
-	let p4Options = CreateArgString(s:p4Options, s:SPACE_AS_SEP, ' ') .
-	      \ ', '
+      if s:p4Options !~# s:EMPTY_STR
+        let p4Options = CreateArgString(s:p4Options, s:SPACE_AS_SEP, ' ') .
+              \ ', '
       endif
       exec 'command! -buffer -nargs=* PSubmitPostpone :call <SID>W(0, ' .
-	    \ p4Options . '"change", <f-args>)'
+            \ p4Options . '"change", <f-args>)'
       set ft=perforce " Just to get the cursor placement right.
-      call s:EndBufSetup(a:outputType)
+      call s:EndBufSetup()
     endif
 
     if s:errCode
@@ -1199,8 +1037,8 @@ endfunction
 function! s:resolveHdlr(scriptOrigin, outputType, ...)
   exec MakeArgumentString()
   if !a:scriptOrigin
-    exec "call s:ParseOptionsIF(1, line('$'), 1, 'resolve', " .
-	  \ argumentString . ")"
+    exec "call s:ParseOptionsIF(1, line('$'), 1, a:outputType, 'resolve', " .
+          \ argumentString . ")"
   endif
 
   if (match(s:p4CmdOptions, '-a[fmsty]\>') == -1) &&
@@ -1214,9 +1052,9 @@ endfunction
 function! s:filelogHdlr(scriptOrigin, outputType, ...)
   exec MakeArgumentString()
   exec "let retVal = s:PFIF(a:scriptOrigin + 1, a:outputType, 'filelog', " .
-	\ argumentString . ")"
+        \ argumentString . ")"
 
-  if s:StartBufSetup(a:outputType)
+  if s:StartBufSetup()
     " No meaning for delete.
     silent! nunmap <buffer> D
     silent! delcommand PItemDelete
@@ -1224,7 +1062,7 @@ function! s:filelogHdlr(scriptOrigin, outputType, ...)
           \ :call s:FilelogDiff2(<line1>, <line2>)
     vnoremap <silent> <buffer> D :PFilelogDiff<CR>
     command! -buffer -nargs=0 PFilelogPrint :call <SID>PFIF(0, 0, 'print',
-	  \ <SID>GetCurrentItem())
+          \ <SID>GetCurrentItem())
     nnoremap <silent> <buffer> p :PFilelogPrint<CR>
     command! -buffer -nargs=0 PFilelogSync :call <SID>FilelogSyncToCurrentItem()
     nnoremap <silent> <buffer> S :PFilelogSync<CR>
@@ -1232,21 +1070,21 @@ function! s:filelogHdlr(scriptOrigin, outputType, ...)
           \ :call <SID>FilelogDescribeChange()
     nnoremap <silent> <buffer> C :PFilelogDescribe<CR>
 
-    call s:EndBufSetup(a:outputType)
+    call s:EndBufSetup()
   endif
 endfunction
 
 function! s:clientsHdlr(scriptOrigin, outputType, ...)
   exec MakeArgumentString()
   exec "let retVal = s:PFIF(a:scriptOrigin + 1, a:outputType, 'clients', " .
-	\ argumentString . ")"
+        \ argumentString . ")"
 
-  if s:StartBufSetup(a:outputType)
+  if s:StartBufSetup()
     command! -buffer -nargs=0 PClientsTemplate
-          \ :call <SID>PFIF(1, 0, 'client', '+P', '-t', <SID>GetCurrentItem())
+          \ :call <SID>PFIF(0, 0, '++A', 'client', '-t', <SID>GetCurrentItem())
     nnoremap <silent> <buffer> P :PClientsTemplate<CR>
 
-    call s:EndBufSetup(a:outputType)
+    call s:EndBufSetup()
   endif
   return retVal
 endfunction
@@ -1254,50 +1092,59 @@ endfunction
 function! s:changesHdlr(scriptOrigin, outputType, ...)
   exec MakeArgumentString()
   exec "let retVal = s:PFIF(a:scriptOrigin + 1, a:outputType, 'changes', " .
-	\ argumentString . ")"
+        \ argumentString . ")"
 
-  if s:StartBufSetup(a:outputType)
+  if s:StartBufSetup()
     command! -buffer -nargs=0 PItemDescribe
-	  \ :call <SID>PChangesDescribeCurrentItem()
+          \ :call <SID>PChangesDescribeCurrentItem()
     command! -buffer -nargs=0 PChangesSubmit
           \ :call <SID>ChangesSubmitChangeList()
     nnoremap <silent> <buffer> S :PChangesSubmit<CR>
     command! -buffer -nargs=0 PChangesOpened
-	  \ :if getline('.') =~ " \\*pending\\* '" |
-	  \    call <SID>PFIF(1, 0, 'opened', '-c', <SID>GetCurrentItem()) |
-	  \  endif
-    command! -buffer -nargs=0 PItemOpen
-	  \ :if getline('.') =~ " \\*pending\\* '" |
-	  \    call <SID>PFIF(0, 0, 'change', <SID>GetCurrentItem()) |
-	  \  else |
-	  \    call <SID>PFIF(0, 0, 'describe', '-dd', <SID>GetCurrentItem()) |
-	  \  endif
+          \ :if getline('.') =~# " \\*pending\\* '" |
+          \    call <SID>PFIF(1, 0, 'opened', '-c', <SID>GetCurrentItem()) |
+          \  endif
     nnoremap <silent> <buffer> o :PChangesOpened<CR>
+    command! -buffer -nargs=0 PChangesDiff
+          \ :if getline('.') =~# " \\*pending\\* '" |
+          \    call <SID>diffHdlr(0, 0, '++c', <SID>GetCurrentItem()) |
+          \  else |
+          \    call <SID>PFIF(0, 0, 'describe', (PFGet('s:defaultDiffOptions')
+          \                 =~ '^\s*$' ? '-dd' : PFGet('s:defaultDiffOptions')),
+          \                   <SID>GetCurrentItem()) |
+          \  endif
+    nnoremap <silent> <buffer> d :PChangesDiff<CR>
+    command! -buffer -nargs=0 PItemOpen
+          \ :if getline('.') =~# " \\*pending\\* '" |
+          \    call <SID>PFIF(0, 0, 'change', <SID>GetCurrentItem()) |
+          \  else |
+          \    call <SID>PFIF(0, 0, 'describe', '-dd', <SID>GetCurrentItem()) |
+          \  endif
 
-    call s:EndBufSetup(a:outputType)
+    call s:EndBufSetup()
   endif
 endfunction
 
 function! s:labelsHdlr(scriptOrigin, outputType, ...)
   exec MakeArgumentString()
   exec "let retVal = s:PFIF(a:scriptOrigin + 1, a:outputType, 'labels', " .
-	\ argumentString . ")"
+        \ argumentString . ")"
 
-  if s:StartBufSetup(a:outputType)
+  if s:StartBufSetup()
     command! -buffer -nargs=0 PLabelsSyncClient
           \ :call <SID>LabelsSyncClientToLabel()
     nnoremap <silent> <buffer> S :PLabelsSyncClient<CR>
     command! -buffer -nargs=0 PLabelsSyncLabel
           \ :call <SID>LabelsSyncLabelToClient()
     nnoremap <silent> <buffer> C :PLabelsSyncLabel<CR>
-    command! -buffer -nargs=0 PLabelsFiles :call <SID>PFIF(1, 0, 'files', '+p',
-	  \ '//...@'. <SID>GetCurrentItem())
+    command! -buffer -nargs=0 PLabelsFiles :call <SID>PFIF(0, 0, '++n', 'files',
+          \ '//...@'. <SID>GetCurrentItem())
     nnoremap <silent> <buffer> I :PLabelsFiles<CR>
-    command! -buffer -nargs=0 PLabelsTemplate :call <SID>PFIF(1, 0, 'label',
-	  \ '+P', '-t', <SID>GetCurrentItem())
+    command! -buffer -nargs=0 PLabelsTemplate :call <SID>PFIF(0, 0, '++A',
+          \ 'label', '-t', <SID>GetCurrentItem())
     nnoremap <silent> <buffer> P :PLabelsTemplate<CR>
 
-    call s:EndBufSetup(a:outputType)
+    call s:EndBufSetup()
   endif
   return retVal
 endfunction
@@ -1308,95 +1155,126 @@ function! s:helpHdlr(scriptOrigin, outputType, ...)
   exec MakeArgumentString()
   let helpWin = bufwinnr(s:helpWinName)
   exec "let retVal = s:PFIF(a:scriptOrigin + 1, a:outputType, 'help', " .
-	\ argumentString . ")"
+        \ argumentString . ")"
 
-  if s:StartBufSetup(a:outputType)
+  if s:StartBufSetup()
     command! -buffer -nargs=0 PHelpSelect
-	  \ :call <SID>helpHdlr(0, 0, expand("<cword>"))
+          \ :call <SID>helpHdlr(0, 0, expand("<cword>"))
     nnoremap <silent> <buffer> <CR> :PHelpSelect<CR>
     nnoremap <silent> <buffer> K :PHelpSelect<CR>
     nnoremap <silent> <buffer> <2-LeftMouse> :PHelpSelect<CR>
-    call s:PFUnSetupBufAutoCommand(DeEscape(s:helpWinName), 'BufUnload')
     call AddNotifyWindowClose(s:helpWinName, s:myScriptId . "RestoreWindows")
     if helpWin == -1 " Resize only when it was not already visible.
       exec "resize " . 20
     endif
     redraw | echo
-	  \ "Press <CR>/K/<2-LeftMouse> to drilldown on perforce help keywords."
+          \ "Press <CR>/K/<2-LeftMouse> to drilldown on perforce help keywords."
 
-    call s:EndBufSetup(a:outputType)
+    call s:EndBufSetup()
   endif
   return retVal
 endfunction
 
 " Built-in command handlers {{{
 function! s:VDiffHandler()
-  if MvNumberOfElements(s:p4Arguments, s:SPACE_AS_SEP, ' ') >= 2
-    return s:SyntaxError("Too many arguments passed to vdiff.")
+  let nArgs = MvNumberOfElements(s:p4Arguments, s:SPACE_AS_SEP, ' ')
+  if nArgs > 2
+    return s:SyntaxError("vdiff: Too many arguments.")
   endif
 
-  if s:p4Arguments != ''
-    let fileName = s:p4Arguments
-    let v:errmsg = ""
-    exec s:splitCommand fileName
-    if v:errmsg != ""
-      return s:SyntaxError("There was an error openeing the file: " . fileName)
-    endif
+  let firstFile = ''
+  let secondFile = ''
+  if nArgs == 2
+    let firstFile = MvElementAt(s:p4Arguments, s:SPACE_AS_SEP, 0, ' ')
+    let secondFile = MvElementAt(s:p4Arguments, s:SPACE_AS_SEP, 1, ' ')
+  elseif nArgs == 1
+    let secondFile = s:p4Arguments
   else
-    let fileName = expand('%') " This is already visible.
+    let secondFile = s:EscapeFileName(s:GetCurFileName())
   endif
-
-  let s:p4Command = 'print'
-  let s:p4CmdOptions = s:p4CmdOptions . ' -q'
-  let s:p4WinName = s:MakeTempName(fileName)
-  let s:p4Arguments = fileName
-  let _splitCommand = s:splitCommand
-  let s:splitCommand = "vsplit"
-  call s:PFIF(2, 0, 'print')
-  let s:splitCommand = _splitCommand
-  if s:errCode != 0
-    return
+  if firstFile == ''
+    let firstFile = s:ConvertToDepotPath(secondFile)
   endif
-  diffthis
-  wincmd l
-  diffthis
-  wincmd _
+  call s:VDiffImpl(firstFile, secondFile, 0)
 endfunction
 
 function! s:VDiff2Handler()
-  if MvNumberOfElements(s:p4Arguments, s:SPACE_AS_SEP, ' ') != 2
-    return s:SyntaxError("vdiff2 command requires two arguments.")
+  if MvNumberOfElements(s:p4Arguments, s:SPACE_AS_SEP, ' ') > 2
+    return s:SyntaxError("vdiff2: Too many arguments")
   endif
+
+  let s:p4Arguments = s:GetDiff2Args()
 
   let firstFile = MvElementAt(s:p4Arguments, s:SPACE_AS_SEP, 0, ' ')
   let secondFile = MvElementAt(s:p4Arguments, s:SPACE_AS_SEP, 1, ' ')
-  let tempFile1 = s:MakeTempName(firstFile)
-  let tempFile2 = s:MakeTempName(secondFile)
-  if firstFile == "" || secondFile == "" || (tempFile1 == tempFile2)
-    return s:SyntaxError(
-	  \ "vdiff2 command requires two distinct files as arguments.")
+  call s:VDiffImpl(firstFile, secondFile, 1)
+endfunction
+
+function! s:VDiffImpl(firstFile, secondFile, preferDepotPaths)
+  let firstFile = a:firstFile
+  let secondFile = a:secondFile
+
+  if a:preferDepotPaths || s:PathRefersToDepot(firstFile)
+    let firstFile = s:ConvertToDepotPath(firstFile)
+    let tempFile1 = s:MakeTempName(firstFile)
+  else
+    let tempFile1 = firstFile
+  endif
+  if a:preferDepotPaths || s:PathRefersToDepot(secondFile)
+    let secondFile = s:ConvertToDepotPath(secondFile)
+    let tempFile2 = s:MakeTempName(secondFile)
+  else
+    let tempFile2 = secondFile
+  endif
+  if firstFile =~# s:EMPTY_STR || secondFile =~# s:EMPTY_STR ||
+        \ (tempFile1 ==# tempFile2)
+    return s:SyntaxError("diff requires two distinct files as arguments.")
   endif
 
-  let s:p4Command = 'print'
-  let s:p4CmdOptions = s:p4CmdOptions . ' -q'
-  let s:p4WinName = tempFile1
-  let s:p4Arguments = firstFile
-  call s:PFIF(2, 0, 'print')
-  if s:errCode != 0
-    return
-  endif
-  let s:p4WinName = tempFile2
-  let s:p4Arguments = secondFile
-  let _splitCommand = s:splitCommand
-  wincmd K
-  let s:splitCommand = "vsplit"
-  call s:PFIF(2, 0, 'print')
-  let s:splitCommand = _splitCommand
-  if s:errCode != 0
-    return
+  if s:IsDepotPath(firstFile)
+    let s:p4Command = 'print'
+    let s:p4CmdOptions = '-q'
+    let s:p4WinName = tempFile1
+    let s:p4Arguments = firstFile
+    call s:PFIF(2, 0, 'print')
+    if s:errCode != 0
+      return
+    endif
+  else
+    let v:errmsg = ''
+    exec 'split' firstFile
+    if v:errmsg != ""
+      return s:ShowVimError("Error opening file: " . firstFile)
+    endif
   endif
   diffthis
-  wincmd l
+  wincmd K
+
+  let _splitCommand = s:splitCommand
+  let s:splitCommand = 'vsplit'
+  let _splitright = &splitright
+  set splitright
+  try
+    if s:IsDepotPath(secondFile)
+      let s:p4Command = 'print'
+      let s:p4CmdOptions = '-q'
+      let s:p4WinName = tempFile2
+      let s:p4Arguments = secondFile
+      call s:PFIF(2, 0, 'print')
+      if s:errCode != 0
+        return
+      endif
+    else
+      let v:errmsg = ''
+      exec 'vsplit' secondFile
+      if v:errmsg != ""
+        return s:ShowVimError("Error opening file: " . secondFile)
+      endif
+    endif
+  finally
+    let s:splitCommand = _splitCommand
+    let &splitright = _splitright
+  endtry
   diffthis
   wincmd _
 endfunction
@@ -1405,28 +1283,20 @@ endfunction
 "   revision specified in the fileName.
 function! s:MakeTempName(filePath)
   let depotPath = s:ConvertToDepotPath(a:filePath)
-  if depotPath == ''
+  if depotPath =~# s:EMPTY_STR
     return ''
   endif
   let tmpName = s:tempDir . '/'
   let branch = s:GetBranchName(depotPath)
-  if branch != ''
-    let tmpName = s:tempDir . branch . '-'
+  if branch !~# s:EMPTY_STR
+    let tmpName = tmpName . branch . '-'
   endif
   let revSpec = s:GetRevisionSpecifier(depotPath)
-  if revSpec != ''
+  if revSpec !~# s:EMPTY_STR
     let tmpName = tmpName . substitute(strpart(revSpec, 1), '/', '_', 'g') . '-'
   endif
   return tmpName . fnamemodify(substitute(a:filePath, '\\*#\d\+$', '', ''),
-	\ ':t')
-endfunction
-
-function! s:SyntaxError(msg)
-  if s:errCode == 0
-    let s:errCode = 1
-  endif
-  call s:ConfirmMessage(a:msg, "OK", 1, "Error")
-  return s:errCode
+        \ ':t')
 endfunction
 " Built-in command handlers }}}
 
@@ -1450,12 +1320,12 @@ function! s:PFOpenAltFile(mode, ...) " {{{
     if a:0 == 0
       " Prompt for codeline string (codeline optionally followed by filenames).
       let codelineStr = s:PromptFor(0, s:useGUIDialogs,
-	    \ "Enter the alternative codeline string: ", '')
-      if codelineStr == ""
-	return ""
+            \ "Enter the alternative codeline string: ", '')
+      if codelineStr =~# s:EMPTY_STR
+        return ""
       endif
       if MvNumberOfElements(codelineStr, s:SPACE_AS_SEP, ' ') < 2
-	let codelineStr = codelineStr . ' ' . s:EscapeFileName(expand('%'))
+        let codelineStr = codelineStr . ' ' . s:EscapeFileName(expand('%'))
       endif
     elseif a:0 == 1
       let codelineStr = a:1 . ' ' . s:EscapeFileName(expand('%'))
@@ -1473,102 +1343,143 @@ function! s:PFOpenAltFile(mode, ...) " {{{
     else
       call MvIterCreate(altFileNames, s:SPACE_AS_SEP, "Perforce", ' ')
       while MvIterHasNext("Perforce")
-	execute ":badd " . MvIterNext("Perforce")
+        execute ":badd " . MvIterNext("Perforce")
       endwhile
       call MvIterDestroy("Perforce")
       execute ((a:mode == 0) ? ":edit " : ":split ") . 
-	    \ MvElementAt(altFileNames, s:SPACE_AS_SEP, 0, ' ')
+            \ MvElementAt(altFileNames, s:SPACE_AS_SEP, 0, ' ')
     endif
   else
     return altFileNames
   endif
 endfunction " }}}
 
-" Interactively change the port/client/user.
-function! s:SwitchPortClientUser() " {{{
+" Interactively change the port/client/user. {{{
+function! s:SwitchPortClientUser()
   let p4Port = s:PromptFor(0, s:useGUIDialogs, "Port: ", s:p4Port)
   let p4Client = s:PromptFor(0, s:useGUIDialogs, "Client: ", s:p4Client)
   let p4User = s:PromptFor(0, s:useGUIDialogs, "User: ", s:p4User)
-  call s:PSwitch(p4Port, p4Client, p4User)
-endfunction " }}}
+  call s:PFSwitch(1, p4Port, p4Client, p4User)
+endfunction
 
 " No args: Print presets and prompt user to select a preset.
 " Number: Select that numbered preset.
 " port [client] [user]: Set the specified settings.
-function! s:PSwitch(...) " {{{
+function! s:PFSwitch(updateClientRoot, ...)
   let nSets = MvNumberOfElements(s:p4Presets, ',')
-  if a:0 == 0
-    if nSets == 0
-      call s:EchoMessage("No sets to select from.", 'Error')
-      return
-    endif
+  if a:0 == 0 || match(a:1, '^\d\+$') == 0
+    let selPreset = ''
+    if a:0 == 0
+      if nSets == 0
+        call s:EchoMessage("No sets to select from.", 'Error')
+        return
+      endif
 
-    let selectedSetting = MvPromptForElement(s:p4Presets, ',', -1,
-          \ "Select the setting: ", -1, s:useGUIDialogs)
-    call s:PSwitchHelper(selectedSetting)
-    return
-  else
-    if match(a:1, '^\d\+') == 0
+      let selPreset = MvPromptForElement(s:p4Presets, ',', -1,
+            \ "Select the setting: ", -1, s:useGUIDialogs)
+    else
       let index = a:1 + 0
       if index >= nSets
         call s:EchoMessage("Not that many sets.", 'Error')
         return
       endif
-      let selectedSetting = MvElementAt(s:p4Presets, ',', index)
-      call s:PSwitchHelper(selectedSetting)
-      return
-    else
-      let g:p4Port = a:1
-      if a:0 > 1
-        let g:p4Client = a:2
-      endif
-      if a:0 > 2
-        let g:p4User = a:3
-      endif
+      let selPreset = MvElementAt(s:p4Presets, ',', index)
     endif
-    let g:p4Password = ""
-    call s:Initialize()
-    call s:GetClientInfo()
+    if selPreset == ''
+      return
+    endif
+    let argumentString = CreateArgString(selPreset, s:SPACE_AS_SEP, ' ')
+  else
+    exec MakeArgumentString()
   endif
-endfunction " }}}
+  exec 'call s:PSwitchHelper(a:updateClientRoot, ' . argumentString . ')'
 
-function! s:PSwitchHelper(settingStr) " {{{
-  if a:settingStr != ""
-    let settingStr = substitute(a:settingStr, '\s\+', "','", 'g')
-    let settingStr = substitute(settingStr, '^', "'", '')
-    let settingStr = substitute(settingStr, '$', "'", '')
-    exec 'call s:PSwitch(' . settingStr . ')'
+  " Loop through all the buffers and invalidate the filestatuses.
+  let lastBufNr = bufnr('$')
+  let i = 1
+  while i <= lastBufNr
+    if bufexists(i) && getbufvar(i, '&buftype') == ''
+      call s:ResetFileStatusForBuffer(i)
+    endif
+    let i = i + 1
+  endwhile
+endfunction
+
+function! s:PSwitchHelper(updateClientRoot, ...)
+  let p4Port = a:1
+  let p4Client = s:p4Client
+  let p4User = s:p4User
+  if a:0 > 1
+    let p4Client = a:2
   endif
-endfunction " }}}
+  if a:0 > 2
+    let p4User = a:3
+  endif
+  if ! s:SetPortClientUser(p4Port, p4Client, p4User)
+    return
+  endif
 
+  if a:updateClientRoot
+    if s:p4Port !=# 'P4CONFIG'
+      call s:GetClientInfo()
+    else
+      let s:clientRoot = '' " Since the client is chosen dynamically.
+    endif
+  endif
+endfunction
+
+function! s:SetPortClientUser(port, client, user)
+  if s:p4Port ==# a:port && s:p4Client ==# a:client && s:p4User ==# a:user
+    return 0
+  endif
+
+  let s:p4Port = a:port
+  let s:p4Client = a:client
+  let s:p4User = a:user
+  let s:p4Password = ''
+  return 1
+endfunction
+
+function! s:PFSwitchComplete(ArgLead, CmdLine, CursorPos)
+  return substitute(s:p4Presets, ',', "\n", 'g')
+endfunction
+" port/client/user }}}
+
+function! s:PHelpComplete(ArgLead, CmdLine, CursorPos)
+  if s:p4KnownCmdsCompStr == ''
+    let s:p4KnownCmdsCompStr = substitute(s:p4KnownCmds, ',', "\n", 'g')
+  endif
+  return s:p4KnownCmdsCompStr.
+          \ "simple\ncommands\nenvironment\nfiletypes\njobview\nrevisions\n".
+          \ "usage\nviews\n"
+endfunction
+ 
 " Handler for opened command.
 function! s:OpenFile(scriptOrigin, outputType, fileName) " {{{
   if filereadable(a:fileName)
     if a:outputType == 0
       let curWin = winnr()
-      let winnr = bufwinnr(a:fileName)
+      let bufNr = FindBufferForName(a:fileName)
+      let winnr = bufwinnr(bufNr)
       if winnr != -1
-	exec winnr.'wincmd w'
+        exec winnr.'wincmd w'
       else
-	wincmd p
+        wincmd p
       endif
-      if curWin != winnr() && winnr() == GetPreviewWinnr()
-	wincmd p " Don't use preview window.
+      if curWin != winnr() && &previewwindow
+        wincmd p " Don't use preview window.
       endif
       if winnr() == curWin
-	split
+        split
       endif
-      let bufNr = FindBufferForName(a:fileName)
-      if bufNr != -1
-	exec "buffer" bufNr | " Preserves line number.
-      else
-	exec "edit " . a:fileName
+      if winbufnr(winnr()) != bufNr
+        if bufNr != -1
+          exec "buffer" bufNr | " Preserves cursor position.
+        else
+          exec "edit " . a:fileName
+        endif
       endif
     else
-      " FIXME: Check if I can use the s:GotoWindow() function here.
-      if ! s:p4HideOnBufHidden && exists('b:p4Command')
-	pclose
-      endif
       exec "pedit " . a:fileName
     endif
   else
@@ -1577,14 +1488,14 @@ function! s:OpenFile(scriptOrigin, outputType, fileName) " {{{
 endfunction " }}}
 
 function! s:DescribeGetCurrentItem() " {{{
-  if getline(".") == "\t<SHOW DIFFS>"
+  if getline(".") ==# "\t<SHOW DIFFS>"
     let b:p4FullCmd = MvRemovePattern(b:p4FullCmd, s:SPACE_AS_SEP,
-	  \ "[\"']\\?-s[\"']\\?", ' ') " -s possibly sorrounded by quotes.
-    call s:PRefreshActivePane()
+          \ "[\"']\\?-s[\"']\\?", ' ') " -s possibly sorrounded by quotes.
+    call s:PFRefreshActivePane()
     call s:SetupDiff()
     return ""
   else
-    return s:ConvertToLocalPath(s:GetCurrentDepotFile(line('.')))
+    return s:GetCurrentDepotFile(line('.'))
   endif
 endfunction " }}}
 
@@ -1600,10 +1511,10 @@ function! s:getCommandItemHandler(outputType, command, args) " {{{
       let itemHandler = 's:PFIF'
     endif
   endif
-  if itemHandler == 's:PFIF'
+  if itemHandler ==# 's:PFIF'
     return "call s:PFIF(1, " . a:outputType . ", '" . handlerCmd . "', " .
-	  \ a:args . ")"
-  elseif itemHandler != ''
+          \ a:args . ")"
+  elseif itemHandler !~# s:EMPTY_STR
     return 'call ' . itemHandler . '(0, ' . a:outputType . ', ' . a:args . ')'
   endif
   return itemHandler
@@ -1611,10 +1522,10 @@ endfunction " }}}
 
 function! s:OpenCurrentItem(outputType) " {{{
   let curItem = s:GetCurrentItem()
-  if curItem != ""
+  if curItem !~# s:EMPTY_STR
     let commandHandler = s:getCommandItemHandler(a:outputType, b:p4Command,
-	  \ "'" . curItem . "'")
-    if commandHandler != ""
+          \ "'" . curItem . "'")
+    if commandHandler !~# s:EMPTY_STR
       exec commandHandler
     endif
   endif
@@ -1627,32 +1538,39 @@ function! s:GetCurrentItem() " {{{
   return ""
 endfunction " }}}
 
+function! s:GetOpenItem() " {{{
+  if exists("b:p4Command") && exists("s:{b:p4Command}OpenItemExpr")
+    exec "return " s:{b:p4Command}OpenItemExpr
+  endif
+  return s:GetCurrentItem()
+endfunction " }}}
+
 function! s:DeleteCurrentItem() " {{{
   let curItem = s:GetCurrentItem()
-  if curItem != ""
+  if curItem !~# s:EMPTY_STR
     let answer = s:ConfirmMessage("Are you sure you want to delete " .
           \ curItem . "?", "&Yes\n&No", 2, "Question")
     if answer == 1
       let commandHandler = s:getCommandItemHandler(2, b:p4Command,
-	    \ "'-d', '" . curItem . "'")
-      if commandHandler != ""
-	exec commandHandler
+            \ "'-d', '" . curItem . "'")
+      if commandHandler !~# s:EMPTY_STR
+        exec commandHandler
       endif
       if v:shell_error == ""
-        call s:PRefreshActivePane()
+        call s:PFRefreshActivePane()
       endif
     endif
   endif
 endfunction " }}}
 
 function! s:LaunchCurrentFile() " {{{
-  if s:fileLauncher == ''
+  if s:fileLauncher =~# s:EMPTY_STR
     call s:ConfirmMessage("There was no launcher command configured to launch ".
-	  \ "this item, use g:p4FileLauncher to configure." , "OK", 1, "Error")
+          \ "this item, use g:p4FileLauncher to configure." , "OK", 1, "Error")
     return
   endif
   let curItem = s:GetCurrentItem()
-  if curItem != ""
+  if curItem !~# s:EMPTY_STR
     exec 'silent! !'.s:fileLauncher curItem
   endif
 endfunction " }}}
@@ -1671,46 +1589,46 @@ function! s:FilelogDiff2(line1, line2) " {{{
   endif
 
   let file1 = s:GetCurrentDepotFile(line1)
-  if file1 != ""
+  if file1 !~# s:EMPTY_STR
     let file2 = s:GetCurrentDepotFile(line2)
-    if file2 != "" && file2 != file1
+    if file2 !~# s:EMPTY_STR && file2 != file1
       " file2 will be older than file1.
-      exec "call s:PFIF(0, -1, \"" . (s:useVimDiff2 ? 'vdiff2' : 'diff2') .
-	    \ "\", file2, file1)"
+      exec "call s:PFIF(0, -2, \"" . (s:useVimDiff2 ? 'vdiff2' : 'diff2') .
+            \ "\", file2, file1)"
     endif
   endif
 endfunction " }}}
 
 function! s:FilelogSyncToCurrentItem() " {{{
   let curItem = s:GetCurrentItem()
-  if curItem != ""
+  if curItem !~# s:EMPTY_STR
     let answer = s:ConfirmMessage("Do you want to sync to: " . curItem . " ?",
           \ "&Yes\n&No", 2, "Question")
     if answer == 1
-      call s:PFIF(1, -1, 'sync', curItem)
+      call s:PFIF(1, -2, 'sync', curItem)
     endif
   endif
 endfunction " }}}
 
 function! s:ChangesSubmitChangeList() " {{{
   let curItem = s:GetCurrentItem()
-  if curItem != ""
+  if curItem !~# s:EMPTY_STR
     let answer = s:ConfirmMessage("Do you want to submit change list: " .
           \ curItem . " ?", "&Yes\n&No", 2, "Question")
     if answer == 1
-      call s:submitHdlr(0, 0, "+y", "-c", curItem)
+      call s:submitHdlr(0, 0, '++y', 'submit', '-c', curItem)
     endif
   endif
 endfunction " }}}
 
 function! s:LabelsSyncClientToLabel() " {{{
   let curItem = s:GetCurrentItem()
-  if curItem != ""
+  if curItem !~# s:EMPTY_STR
     let answer = s:ConfirmMessage("Do you want to sync client to the label: " .
           \ curItem . " ?", "&Yes\n&No", 2, "Question")
     if answer == 1
       exec "let retVal = s:PFIF(1, 1, 'sync',
-	    \ '//" . s:p4Depot . "/...@' . curItem)"
+            \ '//" . s:p4Depot . "/...@' . curItem)"
       return retVal
     endif
   endif
@@ -1718,7 +1636,7 @@ endfunction " }}}
 
 function! s:LabelsSyncLabelToClient() " {{{
   let curItem = s:GetCurrentItem()
-  if curItem != ""
+  if curItem !~# s:EMPTY_STR
     let answer = s:ConfirmMessage("Do you want to sync label: " . curItem .
           \ " to client " . s:p4Client . " ?", "&Yes\n&No", 2, "Question")
     if answer == 1
@@ -1730,12 +1648,12 @@ endfunction " }}}
 
 function! s:FilelogDescribeChange() " {{{
   let changeNo = matchstr(getline("."), ' change \zs\d\+\ze ')
-  if changeNo != ""
+  if changeNo !~# s:EMPTY_STR
     exec "call s:describeHdlr(0, 1, changeNo)"
   endif
 endfunction " }}}
 
-function! s:SetupFileBrowse(outputType) " {{{
+function! s:SetupFileBrowse() " {{{
   " For now, assume that a new window is created and we are in the new window.
   exec "setlocal includeexpr=" . s:myScriptId . "ConvertToLocalPath(v:fname)"
 
@@ -1743,24 +1661,39 @@ function! s:SetupFileBrowse(outputType) " {{{
   silent! nunmap <buffer> D
   silent! delcommand PItemDelete
   command! -buffer -nargs=0 PFileDiff :call <SID>diffHdlr(0, 1,
-	\ <SID>ConvertToLocalPath(<SID>GetCurrentDepotFile(line("."))))
+        \ <SID>GetCurrentDepotFile(line(".")))
   nnoremap <silent> <buffer> D :PFileDiff<CR>
   command! -buffer -nargs=0 PFileProps :call <SID>PFIF(1, 0, 'fstat', '-C',
-	\ <SID>GetCurrentDepotFile(line(".")))
+        \ <SID>GetCurrentDepotFile(line(".")))
   nnoremap <silent> <buffer> P :PFileProps<CR>
+  command! -buffer -nargs=0 PFileLog :call <SID>PFIF(1, 0, 'filelog',
+        \ <SID>GetCurrentDepotFile(line(".")))
+  command! -buffer -nargs=0 PFileEdit :call <SID>PFIF(1, -1, 'edit',
+        \ <SID>GetCurrentItem())
+  nnoremap <silent> <buffer> I :PFileEdit<CR>
   command! -buffer -nargs=0 PFileRevert :call <SID>PFIF(1, -1, 'revert',
-	\ <SID>ConvertToLocalPath(<SID>GetCurrentDepotFile(line("."))))
-  nnoremap <silent> <buffer> R :PFileRevert \| PRefreshActivePane<CR>
-  command! -buffer -nargs=0 PFilePrint :call <SID>printHdlr(0, 0,
-	\ <SID>GetCurrentDepotFile(line(".")))
+        \ <SID>GetCurrentItem())
+  nnoremap <silent> <buffer> R :PFileRevert \| PFRefreshActivePane<CR>
+  command! -buffer -nargs=0 PFilePrint
+        \ :if getline('.') !~# '(\%(u\|ux\)binary)$' |
+        \   call <SID>printHdlr(0, 0,
+        \   substitute(<SID>GetCurrentDepotFile(line('.')), '#[^#]\+$', '', '').
+        \   '#'.
+        \   ((getline(".") =~# '#\d\+ - delete change') ?
+        \    matchstr(getline('.'), '#\zs\d\+\ze - ') - 1 :
+        \    matchstr(getline('.'), '#\zs\d\+\ze - '))
+        \   ) |
+        \ else |
+        \   echo 'PFilePrint: Binary file... ignored.' |
+        \ endif
   nnoremap <silent> <buffer> p :PFilePrint<CR>
   command! -buffer -nargs=0 PFileGet :call <SID>PFIF(1, -1, 'sync',
-	\ <SID>GetCurrentDepotFile(line(".")))
+        \ <SID>GetCurrentDepotFile(line(".")))
   command! -buffer -nargs=0 PFileSync :call <SID>PFIF(1, -1, 'sync',
-	\ substitute(<SID>GetCurrentDepotFile(line(".")), '#.*', '', ''))
+        \ <SID>GetCurrentItem())
   nnoremap <silent> <buffer> S :PFileSync<CR>
   command! -buffer -nargs=0 PFileChange :call <SID>changeHdlr(0, 0, 
-	\ <SID>GetCurrentChangeNumber(line(".")))
+        \ <SID>GetCurrentChangeNumber(line(".")))
   nnoremap <silent> <buffer> C :PFileChange<CR>
   command! -buffer -nargs=0 PFileLaunch :call <SID>LaunchCurrentFile()
   nnoremap <silent> <buffer> A :PFileLaunch<CR>
@@ -1768,10 +1701,6 @@ endfunction " }}}
 
 function! s:SetupDiff() " {{{
   setlocal ft=diff
-  command! -buffer -nargs=0 PDiffLink :call <SID>DiffOpenSrc(0)
-  command! -buffer -nargs=0 PDiffPLink :call <SID>DiffOpenSrc(1)
-  nnoremap <buffer> <silent> O :PDiffLink<CR>
-  nnoremap <buffer> <silent> <CR> :PDiffPLink<CR>
 endfunction " }}}
 
 function! s:SetupSelectItem() " {{{
@@ -1787,7 +1716,6 @@ endfunction " }}}
 
 function! s:RestoreWindows(dummy) " {{{
   call RestoreWindowSettings2("PerforceHelp")
-  call s:PFExecBufClean(bufnr(s:helpWinName))
 endfunction " }}}
 
 function! s:NavigateBack() " {{{
@@ -1822,7 +1750,7 @@ endfunction " }}}
 function! s:GetCurrentChangeNumber(lineNo) " {{{
   let line = getline(a:lineNo)
   let changeNo = matchstr(line, ' - \S\+ change \zs\S\+\ze (')
-  if changeNo == 'default'
+  if changeNo ==# 'default'
     let changeNo = ''
   endif
   return changeNo
@@ -1830,25 +1758,57 @@ endfunction " }}}
 
 function! s:PChangesDescribeCurrentItem() " {{{
   let currentChangeNo = s:GetCurrentItem()
-  if currentChangeNo != ""
+  if currentChangeNo !~# s:EMPTY_STR
     call s:describeHdlr(0, 1, '-s', currentChangeNo)
 
     " For pending changelist, we have to run a separate opened command to get
-    "	the list of opened files. We don't need <SHOW DIFFS> line, as it is
-    "	still not subbmitted. This works like p4win.
-    if getline('.') =~ "^.* \\*pending\\* '.*$"
+    "   the list of opened files. We don't need <SHOW DIFFS> line, as it is
+    "   still not subbmitted. This works like p4win.
+    if getline('.') =~# "^.* \\*pending\\* '.*$"
       wincmd p
       setlocal modifiable
       call setline(line('$'), "Affected files ...")
       call append(line('$'), "")
       call append(line('$'), "")
-      exec '$call s:PW(0, "opened", "-c", currentChangeNo)'
+      exec 'call s:PW(line("$"), line("$"), 0, "opened", "-c", currentChangeNo)'
       wincmd p
     endif
   endif
 endfunction " }}}
 
-function! s:PFSettings() " {{{
+" Return the current value of the setting.
+function! s:GetSettingValue(setting) " {{{
+  let value = ''
+  if a:setting !~# s:EMPTY_STR
+    let setting = a:setting
+    if setting =~# '^g:p4'
+      let setting = strpart(setting, 4)
+    endif
+    if exists('{setting}')
+      let value = {setting}
+    elseif exists('s:{setting}')
+      let value = s:{setting}
+    elseif exists('s:p4{setting}')
+      let value = s:p4{setting}
+    else
+      if exists('s:settingsMap{setting}')
+        let value = s:{s:settingsMap{setting}}
+      else
+        let localVar = substitute(setting, '^\(\u\)', '\L\1', '')
+        if exists('s:{localVar}')
+          let value = s:{localVar}
+        else
+          echoerr "Internal error detected, couldn't locate value for " .
+                \ setting
+        endif
+      endif
+    endif
+  endif
+  return value
+endfunction " }}}
+
+" {{{
+function! s:PFSettings(...)
   if s:sortSettings
     if exists("s:sortedSettings")
       let settings = s:sortedSettings
@@ -1859,54 +1819,47 @@ function! s:PFSettings() " {{{
   else
     let settings = s:settings
   endif
-  let selectedSetting = MvPromptForElement2(settings, ',', -1,
-	\ "Select the setting: ", -1, 0, 3)
-  if selectedSetting != ""
-    let oldVal = ''
-    if exists('s:p4{selectedSetting}')
-      let oldVal = s:p4{selectedSetting}
+  if a:0 > 0
+    let selectedSetting = a:1
+  else
+    let selectedSetting = MvPromptForElement2(settings, ',', -1,
+          \ "Select the setting: ", -1, 0, 3)
+  endif
+  if selectedSetting !~# s:EMPTY_STR
+    let oldVal = s:GetSettingValue(selectedSetting)
+    if a:0 > 1
+      let newVal = a:2
+      echo 'Current value for' selectedSetting.': "'.oldVal.'" New value: "'.
+            \ newVal.'"'
     else
-      if exists('s:settingsMap{selectedSetting}')
-	let oldVal = s:{s:settingsMap{selectedSetting}}
-      else
-	let localVar = substitute(selectedSetting, '^\(\u\)', '\L\1', '')
-	if exists('s:{localVar}')
-	  let oldVal = s:{localVar}
-	else
-	  echoerr "Internal error detected, couldn't locate value for " .
-		\ selectedSetting
-	endif
-      endif
+      let newVal = input('Current value for ' . selectedSetting . ' is: ' .
+            \ oldVal . "\nEnter new value: ", oldVal)
     endif
-    let newVal = input("Current value for " . selectedSetting . " is: " .
-	  \ oldVal . "\nEnter new value: ", oldVal)
     if newVal != oldVal
-      exec "let g:p4" . selectedSetting . " = '" . newVal . "'"
+      let g:p4{selectedSetting} = newVal
       call s:Initialize()
     endif
   endif
-endfunction " }}}
+endfunction
+
+function! s:PFSettingsComplete(ArgLead, CmdLine, CursorPos)
+  if s:settingsCompStr == ''
+    let s:settingsCompStr = substitute(s:settings, ',', "\n", 'g')
+  endif
+  return s:settingsCompStr
+endfunction
+" }}}
 
 function! s:MakeRevStr(ver) " {{{
   let verStr = ''
-  if a:ver =~ '^[#@&]'
+  if a:ver =~# '^[#@&]'
     let verStr = a:ver
-  elseif a:ver =~ '^[-+]\?\d\+\>\|^none\>\|^head\>\|^have\>'
+  elseif a:ver =~# '^[-+]\?\d\+\>\|^none\>\|^head\>\|^have\>'
     let verStr = '#' . a:ver
-  elseif a:ver != ''
+  elseif a:ver !~# s:EMPTY_STR
     let verStr = '@' . a:ver
   endif
   return verStr
-endfunction " }}}
-
-function! s:GetDepotName(fileName) " {{{
-  if s:IsFileUnderDepot(a:fileName)
-    return s:p4Depot
-  elseif stridx(a:fileName, '//') == 0
-    return matchstr(a:fileName, '^//\zs[^/]\+\ze/')
-  else
-    return ''
-  endif
 endfunction " }}}
 
 function! s:GetBranchName(fileName) " {{{
@@ -1919,152 +1872,50 @@ function! s:GetBranchName(fileName) " {{{
   endif
 endfunction " }}}
 
-function! s:GetRevisionSpecifier(fileName) " {{{
-  return matchstr(a:fileName,
-	\ '^\(\%(\S\|\\\@<!\%(\\\\\)*\\ \)\+\)[\\]*\zs[#@].*$')
-endfunction " }}}
+function! s:GetDiff2Args()
+  let p4Arguments = s:p4Arguments
+  " The pattern takes care of ignoring protected spaces as separators.
+  let nArgs = MvNumberOfElements(p4Arguments, s:SPACE_AS_SEP, ' ')
+  if nArgs < 2
+    if nArgs == 0
+      let file = s:EscapeFileName(s:GetCurFileName())
+    else
+      let file = p4Arguments
+    endif
+    let ver1 = s:PromptFor(0, s:useGUIDialogs, "Version1? ", '')
+    let ver2 = s:PromptFor(0, s:useGUIDialogs, "Version2? ", '')
+    let p4Arguments = file . s:MakeRevStr(ver1) . " " . file .
+          \ s:MakeRevStr(ver2)
+  endif
+  return p4Arguments
+endfunction
 
-function! s:PExecCmd(cmd) " {{{
-  if exists(':'.a:cmd)
-    exec a:cmd
+function! s:ToggleCheckOutPrompt(interactive)
+  aug P4CheckOut
+  au!
+  if s:promptToCheckout
+    let s:promptToCheckout = 0
   else
-    call s:EchoMessage('The command: ' . a:cmd .
-	  \ ' is not defined for this buffer.', 'WarningMsg')"
+    let s:promptToCheckout = 1
+    au FileChangedRO * nested :call <SID>CheckOutFile()
   endif
-endfunction " }}}
-
-function! s:SilentSub(pat, cmd) " {{{
-  let _search = @/
-  try
-    let @/ = a:pat
-    silent! exec a:cmd
-  finally
-    let @/ = _search
-  endtry
-endfunction " }}}
-
-" Open the source line for the current line from the diff.
-function! s:DiffOpenSrc(preview) " {{{
-  if s:GetCurrentItem() != ''
-    PItemOpen
+  aug END
+  if a:interactive
+    echomsg "PromptToCheckout is now " . ((s:promptToCheckout) ? "enabled." :
+          \ "disabled.")
   endif
-  call SaveHardPosition('DiffOpenSrc')
-  let orgLine = line('.')
-  " Search backwards to find the header for this diff (could contain two
-  " depot files or one depot file with or without a local file).
-  let filePat = '\zs[^#]\+\%(#\d\+\)\=\ze\%( ([^)]\+)\)\='
-  if search('^==== '.filePat.'\%( - '.filePat.'\)\= ====', 'bW')
-    let firstFile = matchstr(getline('.'), '^==== \zs'.filePat.
-	  \ '\%( - \| ====\)')
-    let secondFile = matchstr(getline('.'), ' - '.filePat.' ====',
-	  \ strlen(firstFile)+5)
-    call RestoreHardPosition('DiffOpenSrc')
-    if firstFile == ''
-      return
-    elseif secondFile == ''
-      " When there is only one file, then it is treated as the secondFile.
-      let secondFile = firstFile
-      let firstFile = ''
-    endif
-
-    " Search for the start of the diff segment. We could be in default,
-    " context or unified mode.
-    if search('^\d\+\%(,\d\+\)\=[adc]\d\+\%(,\d\+\)\=$', 'bW') " default.
-      let segStLine = line('.')
-      let segHeader = getline('.')
-      call RestoreHardPosition('DiffOpenSrc')
-      let context = 'depot'
-      let regPre = '^'
-      if getline('.') =~ '^>'
-	let context = 'local'
-	let regPre = '[cad]'
-	if search('^---$', 'bW') && line('.') > segStLine
-	  let segStLine = line('.')
-	endif
-      endif
-      let stLine = matchstr(segHeader, regPre.'\zs\d\+\ze')
-      call RestoreHardPosition('DiffOpenSrc')
-      let offset = line('.') - segStLine - 1
-    elseif search('\([*-]\)\1\1 \d\+,\d\+ \1\{4}', 'bW') " context.
-      if getline('.') =~ '^-'
-	let context = 'local'
-      else
-	let context = 'depot'
-      endif
-      let stLine = matchstr(getline('.'), '^[*-]\{3} \zs\d\+\ze,')
-      let segStLine = line('.')
-      call RestoreHardPosition('DiffOpenSrc')
-      let offset = line('.') - segStLine - 1
-    elseif search('^@@ -\=\d\+,\d\+ +\=\d\+,\d\+ @@$', 'bW') " unified
-      let segStLine = line('.')
-      let segHeader = getline('.')
-      call RestoreHardPosition('DiffOpenSrc')
-      let context = 'local'
-      let sign = '+'
-      if getline('.') =~ '^-'
-	let context = 'depot'
-	let sign = '-'
-      endif
-      let stLine = matchstr(segHeader, ' '.sign.'\zs\d\+\ze,\d\+')
-      let _ma = &l:modifiable
-      try
-	setl modifiable
-	" Count the number of lines that come from the other side (those lines
-	"   that start with an opposite sign).
-	let _ss = @/ | let @/ = '^'.substitute('-+', sign, '', '') |
-	      \ let offOffset = matchstr(GetVimCmdOutput( segStLine.',.s//&/'),
-	      \ '\d\+\ze substitutions\? on \d\+ lines\?') + 0 | let @/ = _ss
-	call RestoreHardPosition('DiffOpenSrc')
-	let offset = line('.') - segStLine - 1 - offOffset
-	if offOffset > 0
-	  silent! undo
-	  call RestoreHardPosition('DiffOpenSrc')
-	endif
-      finally
-	let &l:modifiable = _ma
-      endtry
-    endif
-
-    let s:errCode = 0
-    if context == 'depot' && firstFile == ''
-      return
-    endif
-    if context == 'local'
-      let file = secondFile
-    else
-      let file = firstFile
-    endif
-    if s:IsDepotPath(file)
-      call s:printHdlr(0, a:preview, file)
-      let offset = offset + 1 " For print header.
-    else
-      call s:OpenFile(1, a:preview, file)
-    endif
-    if s:errCode == 0
-      if a:preview
-	wincmd P
-      endif
-      exec (stLine + offset)
-      if a:preview
-	" Also works as a work-around for the buffer not getting scrolled.
-	normal! z.
-	wincmd p
-      endif
-    endif
-  endif
-endfunction " }}}
-
+endfunction
 """ END: Helper functions }}}
 
 
 """ BEGIN: Middleware functions {{{
 
 " Filter contents through p4.
-function! s:PW(scriptOrigin, ...) range
+function! s:PW(fline, lline, scriptOrigin, ...) range
   exec MakeArgumentString()
   if a:scriptOrigin != 2
-    exec "call s:ParseOptions(a:firstline, a:lastline, '++f', " .
-	  \ argumentString . ")"
+    exec "call s:ParseOptions(a:fline, a:lline, 0, '++f', " .
+          \ argumentString . ")"
   else
     let s:commandMode = s:CM_FILTER
   endif
@@ -2074,21 +1925,20 @@ function! s:PW(scriptOrigin, ...) range
 endfunction
 
 " Generate raw output into a new window.
-function! s:PFRaw(outputType, ...)
+function! s:PFRaw(...)
   exec MakeArgumentString()
-  exec "call s:ParseOptions(1, line('$'), " . argumentString . ")"
+  exec "call s:ParseOptions(1, line('$'), 0, " . argumentString . ")"
 
-  let retVal = s:PFImpl(a:outputType, 1, 0, "")
+  let retVal = s:PFImpl(1, 0, "")
   return retVal
 endfunction
 
 function! s:W(quitWhenDone, commandName, ...)
   exec MakeArgumentString()
-  exec "call s:ParseOptionsIF(1, line('$'), 0, a:commandName, " .
-	\ argumentString . ")"
+  exec "call s:ParseOptionsIF(1, line('$'), 0, 5, a:commandName, " .
+        \ argumentString . ")"
   let s:p4CmdOptions = s:p4CmdOptions . ' -i'
-  " We can't capture the return value using this syntax.
-  1,$call s:PW(2)
+  let retVal = s:PW(1, line('$'), 2)
   if s:errCode == 0
     setl nomodified
     if a:quitWhenDone
@@ -2099,62 +1949,65 @@ function! s:W(quitWhenDone, commandName, ...)
       let newChangeNo = matchstr(getline('.'), '\d\+')
       let _z = @z
       let _undolevels=&undolevels
-      let _bufhidden=&l:bufhidden
       try
-	silent! normal! 1G"zyG
-	undo
-	" Make the below changes such a way that they can't be undo. This in a
-	"   way, forces Vim to create an undo point, so that user can later
-	"   undo and see these changes, with proper change number and status
-	"   in place. Unfortunately this has the side effect of loosing the
-	"   previous undo history.
-	set undolevels=-1
-	if search("^Change:\tnew$")
-	  call setline('.', "Change:\t" . newChangeNo)
-	endif
-	if search("^Status:\tnew$")
-	  call setline('.', "Status:\tpending")
-	endif
-	call s:PFUnSetupBufAutoCommand(expand('%'), 'BufUnload')
-	setlocal bufhidden=hide
-	setl nomodified
-	let &undolevels=_undolevels
-	silent! 0,$delete _
-	silent! put! =@z
-	call s:PFSetupForSpec()
+        silent! keepjumps normal! 1G"zyG
+        undo
+        " Make the below changes such a way that they can't be undo. This in a
+        "   way, forces Vim to create an undo point, so that user can later
+        "   undo and see these changes, with proper change number and status
+        "   in place. This has the side effect of loosing the previous undo
+        "   history, which can be considered desirable, as otherwise the user
+        "   can undo this change and back to the new state.
+        set undolevels=-1
+        if search("^Change:\tnew$")
+          silent! keepjumps call setline('.', "Change:\t" . newChangeNo)
+        endif
+        if search("^Status:\tnew$")
+          silent! keepjumps call setline('.', "Status:\tpending")
+        endif
+        setl nomodified
+        let &undolevels=_undolevels
+        " Creating an undo point is actually undesirable, as the user will be
+        "   able to undo the above change and get back to the new state.
+        " Create an an undo point, so that user can later undo and see these
+        "   changes, with proper change number and status in place.
+        "exec "normal! i\<C-G>u"
+        silent! 0,$delete _
+        silent! put! =@z
+        call s:PFSetupForSpec()
       finally
-	let @z = _z
-	let &undolevels=_undolevels
-	let &l:bufhidden=_bufhidden
+        let @z = _z
+        let &undolevels=_undolevels
       endtry
       let b:p4FullCmd = s:CreateFullCmd('-o change ' . newChangeNo)
     endif
   endif
 endfunction
 
-function! s:ParseOptionsIF(fline, lline, scriptOrigin, commandName, ...) " range
+function! s:ParseOptionsIF(fline, lline, scriptOrigin, outputType, commandName,
+      \ ...) " range
   exec MakeArgumentString()
 
   " There are multiple possibilities here:
   "   - scriptOrigin, in which case the commandName contains the name of the
-  "	command, but the varArgs also may contain it.
+  "     command, but the varArgs also may contain it.
   "   - commandOrigin, in which case the commandName may actually be the
-  "	name of the command, or it may be the first argument to p4 itself, in
-  "	any case we will let p4 handle the error cases.
-  if MvContainsElement(s:p4KnownCmds, ',', a:commandName) && a:scriptOrigin
-    exec "call s:ParseOptions(a:fline, a:lline, " .
-	  \ argumentString . ")"
+  "     name of the command, or it may be the first argument to p4 itself, in
+  "     any case we will let p4 handle the error cases.
+  if MvContainsElement(s:allCommands, ',', a:commandName) && a:scriptOrigin
+    exec "call s:ParseOptions(a:fline, a:lline, a:outputType, " .
+          \ argumentString . ")"
     " Add a:commandName only if it doesn't already exist in the var args.
     " Handles cases like "PF help submit" and "PF -c <client> change changeno#",
     "   where the commandName need not be at the starting and there could be
     "   more than one valid commandNames (help and submit).
     if s:p4Command != a:commandName
-      exec "call s:ParseOptions(a:fline, a:lline, a:commandName, "
-	    \ . argumentString . ")"
+      exec "call s:ParseOptions(a:fline, a:lline, a:outputType, a:commandName, "
+            \ . argumentString . ")"
     endif
   else
-    exec "call s:ParseOptions(a:fline, a:lline, a:commandName, " .
-	  \ argumentString . ")"
+    exec "call s:ParseOptions(a:fline, a:lline, a:outputType, a:commandName, " .
+          \ argumentString . ")"
   endif
 endfunction
 
@@ -2164,53 +2017,70 @@ endfunction
 "   name, when it is script origin.
 " scriptOrigin: An integer indicating the origin of the call. 
 "   0 - Originated directly from the user, so should redirect to the specific
-"	command handler (if exists), after some basic processing.
+"       command handler (if exists), after some basic processing.
 "   1 - Originated from the script, continue with the full processing.
 "   2 - Same as 1 but, avoid parsing arguments (they are already parsed by the
 "       caller).
-function! s:PFIF(scriptOrigin, outputType, commandName, ...) range
+function! s:PFIF(scriptOrigin, outputType, commandName, ...)
+  exec MakeArgumentString()
+  return s:PFrangeIF(1, line('$'), a:scriptOrigin, a:outputType,
+        \ a:commandName, '/argumentString/', argumentString)
+endfunction
+
+function! s:PFrangeIF(fline, lline, scriptOrigin, outputType, commandName, ...)
   let output = '' " Used only when mode is s:CM_DISPLAY
   if a:scriptOrigin != 2
-    exec MakeArgumentString()
-    exec "call s:ParseOptionsIF(a:firstline, a:lastline, "
-	  \ . "a:scriptOrigin, a:commandName, " . argumentString . ")"
-    if s:commandMode == s:CM_DISPLAY
+    if a:0 > 1 && a:1 ==# '/argumentString/'
+      let argumentString = a:2
+    else
+      exec MakeArgumentString()
+    endif
+    exec "call s:ParseOptionsIF(a:fline, a:lline, "
+          \ . "a:scriptOrigin, a:outputType, a:commandName, " .
+          \ argumentString . ")"
+    if s:commandMode ==# s:CM_DISPLAY
       let output = DeEscape(s:p4Arguments)
       let s:p4Arguments = ''
       let s:p4WinName = s:MakeWindowName()
     endif
-  elseif s:commandMode == s:CM_DISPLAY
+  elseif s:commandMode ==# s:CM_DISPLAY
     let output = a:1
   endif
 
-  let modifyWindowName = 0
-  let outputType = a:outputType
-  if a:outputType == -1
-    if MvContainsElement(s:outputType20Cmds, ',', s:p4Command)
-      let outputType = 20
-    else
-      let outputType = 0
-    endif
-  endif
-
+  " FIXME: May be we should not support specifying -ve outputType using ++o.
   let outputIdx = MvIndexOfPattern(s:p4Options, s:SPACE_AS_SEP,
-	\ '+o\s\+\d\+', ' ') " Searches including output mode.
+        \ '++o\s\+\d\+', ' ') " Searches including output mode.
   if outputIdx != -1
-    let outputType = MvElementAt(s:p4Options, s:SPACE_AS_SEP, outputIdx + 1,
-	  \ ' ') + 0
+    let s:outputType = MvElementAt(s:p4Options, s:SPACE_AS_SEP, outputIdx + 1,
+          \ ' ') + 0
+  endif
+  " If this command doesn't care about -ve outputType, then just take care of
+  "   it right here.
+  if s:outputType < 0 &&
+        \ ! MvContainsElement(s:limitLinesInDlgCmds, ',', s:p4Command)
+    let s:outputType = a:outputType + 2
   endif
   if ! a:scriptOrigin
     if exists('*s:{s:p4Command}Hdlr')
-      return s:{s:p4Command}Hdlr(1, outputType, a:commandName)
+      return s:{s:p4Command}Hdlr(1, s:outputType, a:commandName)
     endif
   endif
+  " Temporarily switch to type "4" such that we can look into the number of
+  "   lines in the output and conditionally make it (0,1) or 2.
+  if s:outputType < 0
+    let s:outputType = 4
+  endif
+
  
-  let dontProcess = MvContainsElement(s:p4CmdOptions, s:SPACE_AS_SEP, '+p', ' ')
+  let modifyWindowName = 0
+  let dontProcess = MvContainsElement(s:p4Options, s:SPACE_AS_SEP, '++n', ' ')
+  let noDefaultArg = MvContainsElement(s:p4Options, s:SPACE_AS_SEP, '++N', ' ')
   " If there is a confirm message for this command, then first prompt user.
-  let dontConfirm = MvContainsElement(s:p4CmdOptions, s:SPACE_AS_SEP, '+y', ' ')
+  let dontConfirm = MvContainsElement(s:p4Options, s:SPACE_AS_SEP, '++y',
+        \ ' ')
   if exists('s:confirmMsgs{s:p4Command}') && ! dontConfirm
     let option = s:ConfirmMessage(s:confirmMsgs{s:p4Command}, "&Yes\n&No", 2,
-	  \ "Question")
+          \ "Question")
     if option == 2
       let s:errCode = 2
       return ''
@@ -2218,109 +2088,116 @@ function! s:PFIF(scriptOrigin, outputType, commandName, ...) range
   endif
 
   if MvContainsElement(s:limitListCmds, ',', s:p4Command) &&
-	\ ! MvContainsElement(s:p4CmdOptions, s:SPACE_AS_SEP, '-m', ' ') &&
-	\ s:defaultListSize > -1
+        \ ! MvContainsElement(s:p4CmdOptions, s:SPACE_AS_SEP, '-m', ' ') &&
+        \ s:defaultListSize > -1
     let s:p4CmdOptions = '-m ' . s:defaultListSize . ' ' . s:p4CmdOptions
     let modifyWindowName = 1
   endif
   if MvContainsElement(s:diffCmds, ',', s:p4Command) &&
-	\ ! MvContainsPattern(s:p4CmdOptions, s:SPACE_AS_SEP, '-d[cdnsu]', ' ')
-	\ && s:defaultDiffOptions != ""
+        \ ! MvContainsPattern(s:p4CmdOptions, s:SPACE_AS_SEP, '-d.*', ' ')
+        \ && s:defaultDiffOptions !~# s:EMPTY_STR
     let s:p4CmdOptions = s:defaultDiffOptions . ' ' . s:p4CmdOptions
     let modifyWindowName = 1
   endif
 
-  " Process p4Arguments.
-  if ! dontProcess && s:p4Arguments == "" && s:commandMode == s:CM_RUN
+  " Process p4Arguments, unless explicitly not requested to do so, or the '-x'
+  "   option to read arguments from a file is given.
+  if ! dontProcess && ! noDefaultArg && s:p4Arguments =~# s:EMPTY_STR &&
+        \ !MvContainsElement(s:p4Options, s:SPACE_AS_SEP, '-x', ' ')
     if (MvContainsElement(s:askUserCmds, ',', s:p4Command) &&
-	  \ ! MvContainsElement(s:p4CmdOptions, s:SPACE_AS_SEP, '-i', ' ')) ||
-	  \ MvContainsElement(s:p4CmdOptions, s:SPACE_AS_SEP, '+P', ' ')
+          \ ! MvContainsElement(s:p4CmdOptions, s:SPACE_AS_SEP, '-i', ' ')) ||
+          \ MvContainsElement(s:p4Options, s:SPACE_AS_SEP, '++A', ' ')
       if MvContainsElement(s:genericPromptCmds, ',', s:p4Command)
-	let prompt = 'Enter arguments for ' . s:p4Command . ': '
+        let prompt = 'Enter arguments for ' . s:p4Command . ': '
       else
-	let prompt = "Enter the " . s:p4Command . " name: "
+        let prompt = "Enter the " . s:p4Command . " name: "
       endif
       let additionalArg = s:PromptFor(0, s:useGUIDialogs, prompt, '')
-      if additionalArg == ""
-	if MvContainsElement(s:genericPromptCmds, ',', s:p4Command)
-	  call s:EchoMessage('Arguments required for '. s:p4Command, 'Error')
-	else
-	  call s:EchoMessage(substitute(s:p4Command, "^.", '\U&', '') .
-		\ " name required.", 'Error')
-	endif
-	let s:errCode = 2
+      if additionalArg =~# s:EMPTY_STR
+        if MvContainsElement(s:genericPromptCmds, ',', s:p4Command)
+          call s:EchoMessage('Arguments required for '. s:p4Command, 'Error')
+        else
+          call s:EchoMessage(substitute(s:p4Command, "^.", '\U&', '') .
+                \ " name required.", 'Error')
+        endif
+        let s:errCode = 2
         return ''
       endif
       let s:p4Arguments =  additionalArg
     elseif ! dontProcess &&
-	  \ ! MvContainsElement(s:curFileNotDefCmds, ',', s:p4Command) &&
-	  \ ! MvContainsElement(s:nofileArgsCmds, ',', s:p4Command)
-      let s:p4Arguments = s:EscapeFileName(expand('%'))
+          \ ! MvContainsElement(s:curFileNotDefCmds, ',', s:p4Command) &&
+          \ ! MvContainsElement(s:nofileArgsCmds, ',', s:p4Command)
+      let s:p4Arguments = s:EscapeFileName(s:GetCurFileName())
       let modifyWindowName = 1
     endif
   elseif ! dontProcess && match(s:p4Arguments, '[#@&]') != -1
+    let p4Arguments = s:p4Arguments
     " If there is an argument without a filename, then assume it is the current
-    "	file.
+    "   file.
     " Pattern is the start of line or whitespace followed by an unprotected
-    "	[#@&] with a revision/codeline specifier and then again followed by
-    "	end of line or whitespace.
-    let s:p4Arguments = substitute(s:p4Arguments,
+    "   [#@&] with a revision/codeline specifier and then again followed by
+    "   end of line or whitespace.
+    let p4Arguments = substitute(p4Arguments,
           \ '\%(^\|\%('.s:SPACE_AS_SEP.'\)\+\)\@<=' .
-	  \ '\\\@<!\%(\\\\\)*\(\%([#@&]\%([-+]\?\d\+\|\S\+\)\)\+\)' . 
-	  \ '\%(\%('.s:SPACE_AS_SEP.'\)\+\|$\)\@=',
-	  \ '\=s:EscapeFileName(expand("%")) . submatch(1) . submatch(2)', 'g')
+          \ '\\\@<!\%(\\\\\)*\(\%([#@&]\%([-+]\?\d\+\|\S\+\)\)\+\)' . 
+          \ '\%(\%('.s:SPACE_AS_SEP.'\)\+\|$\)\@=',
+          \ '\=s:EscapeFileName(s:GetCurFileName()) . submatch(1) .'.
+          \   ' submatch(2)',
+          \ 'g')
 
     " Adjust the revisions for offsets.
-    call s:PushP4Context()
     " Pattern is a series of non-space chars or protected spaces (filename)
-    "	followed by the revision specifier.
-    let p4Arguments = substitute(s:p4Arguments,
-	  \ '\(\%(\S\|\\\@<!\%(\\\\\)*\\ \)\+\)[\\]*#\([-+]\d\+\)',
-	  \ '\=submatch(1) . "#" . ' .
-	  \ 's:AdjustRevision(submatch(1), submatch(2))', 'g')
-    call s:PopP4Context()
-    let s:p4Arguments = p4Arguments
+    " followed by the revision specifier.
+    let p4Arguments = substitute(p4Arguments,
+          \ '\(\%(\S\|\\\@<!\%(\\\\\)*\\ \)\+\)[\\]*#\([-+]\d\+\)',
+          \ '\=submatch(1) . "#" . ' .
+          \ 's:AdjustRevision(submatch(1), submatch(2))', 'g')
     if s:errCode != 0
       return ''
     endif
 
     " Unprotected '&'.
-    if match(s:p4Arguments, '\\\@<!\%(\\\\\)*&') != -1
+    if match(p4Arguments, '\\\@<!\%(\\\\\)*&') != -1
+      " CAUTION: Make sure the view mappings are generated before
+      "   s:PFGetAltFiles() gets invoked, otherwise the call results in a
+      "   recursive |sub-replace-special| and corrupts the mappings.
+      call s:CondUpdateViewMappings()
       " Pattern is a series of non-space chars or protected spaces (filename)
-      "	  including the revision specifier, if any, followed by the alternative
-      "	  codeline specifier.
-      let s:p4Arguments = substitute(s:p4Arguments,
-	    \ '\(\%([^ ]\|\\\@<!\%(\\\\\)*\\ \)\+' .
-	    \ '\%([\\]*[#@]\%(-\?\d\+\|\w\+\)\)\?\)\\\@<!\%(\\\\\)*&\(\w\+\)',
-	    \ '\=s:PFGetAltFiles(submatch(2), submatch(1))', 'g')
+      "   including the revision specifier, if any, followed by the alternative
+      "   codeline specifier.
+      let p4Arguments = substitute(p4Arguments,
+            \ '\(\%([^ ]\|\\\@<!\%(\\\\\)*\\ \)\+' .
+            \ '\%([\\]*[#@]\%(-\?\d\+\|\w\+\)\)\?\)\\\@<!\%(\\\\\)*&\(\w\+\)',
+            \ '\=s:PFGetAltFiles(submatch(2), submatch(1))', 'g')
     endif
+    let p4Arguments = UnEscape(p4Arguments, '&@')
+
+    let s:p4Arguments = p4Arguments
     let modifyWindowName = 1
   endif
 
   let testMode = 0
-  if MvContainsElement(s:p4Options, s:SPACE_AS_SEP, '+d', ' ')
-    let testMode = 1 " Ignore.
-  elseif MvContainsElement(s:p4Options, s:SPACE_AS_SEP, '+t', ' ')
-    let testMode = 2 " Debug.
+  if MvContainsElement(s:p4Options, s:SPACE_AS_SEP, '++T', ' ')
+    let testMode = 1 " Dry run, opens the window.
+  elseif MvContainsElement(s:p4Options, s:SPACE_AS_SEP, '++D', ' ')
+    let testMode = 2 " Debug. Opens the window and displays the command.
   endif
 
   " Remove all the built-in options.
   let _p4Options = s:p4Options
-  let s:p4Options = substitute(s:p4Options, '+\S\+\%(\s\+[^-+]\+\|\s\+\)\?',
-	\ '', 'g')
-  let _p4CmdOptions = s:p4CmdOptions
-  let s:p4CmdOptions = substitute(s:p4CmdOptions,
-	\ '+\S\+\%(\s\+[^-+]\+\|\s\+\)\?', '', 'g')
-  if s:p4Options != _p4Options || s:p4CmdOptions != _p4CmdOptions
+  let s:p4Options = substitute(s:p4Options, '++\S\+\%(\s\+[^-+]\+\|\s\+\)\?',
+        \ '', 'g')
+  if s:p4Options != _p4Options
     let modifyWindowName = 1
   endif
   if MvContainsElement(s:diffCmds, ',', s:p4Command)
     " Remove the dummy option, if exists (see |perforce-default-diff-format|).
-    let s:p4CmdOptions = MvRemoveElement(s:p4CmdOptions, s:SPACE_AS_SEP, '-dd',
-	  \ ' ')
+    let s:p4CmdOptions = MvRemoveElement(s:p4CmdOptions, s:SPACE_AS_SEP, '-d',
+          \ ' ')
+    let modifyWindowName = 1
   endif
 
-  if s:p4Command == 'help'
+  if s:p4Command ==# 'help'
     " Use simple window name for all the help commands.
     let s:p4WinName = s:helpWinName
   elseif modifyWindowName
@@ -2336,16 +2213,16 @@ function! s:PFIF(scriptOrigin, outputType, commandName, ...) range
   let specMode = 0
   if MvContainsElement(s:specCmds, ',', s:p4Command)
     if match(s:p4CmdOptions, '-d\>') == -1
-	  \ && ! MvContainsElement(s:noOutputCmds, ',', s:p4Command)
+          \ && ! MvContainsElement(s:noOutputCmds, ',', s:p4Command)
       let s:p4CmdOptions = "-o " . s:p4CmdOptions
     endif
 
     " Go into specification mode only if the user intends to edit the output.
-    if ((s:p4Command == 'submit' &&
-	  \ ! MvContainsElement(s:p4CmdOptions, s:SPACE_AS_SEP, '-c', ' ')) ||
+    if ((s:p4Command ==# 'submit' &&
+          \ ! MvContainsElement(s:p4CmdOptions, s:SPACE_AS_SEP, '-c', ' ')) ||
       \ (! MvContainsElement(s:specOnlyCmds, ',', s:p4Command) &&
-	  \ ! MvContainsElement(s:p4CmdOptions, s:SPACE_AS_SEP, '-d', ' '))) &&
-     \ outputType == 0
+          \ ! MvContainsElement(s:p4CmdOptions, s:SPACE_AS_SEP, '-d', ' '))) &&
+     \ s:outputType == 0
       let specMode = 1
     endif
   endif
@@ -2356,36 +2233,31 @@ function! s:PFIF(scriptOrigin, outputType, commandName, ...) range
   endif
 
   let retryCount = 0
+  let retVal = ''
+  " FIXME: When is "not clearing" (value 2) useful at all?
+  let clearBuffer = (testMode != 2 ? ! navigateCmd : 2)
   " CAUTION: This is like a do..while loop, but not exactly the same, be
   " careful using continue, the counter will not get incremented.
   while 1
-    " Save the context, as the below call may result in a reentrant call to
-    "	this function.
-    call s:PushP4Context()
-    let retVal = s:PFImpl(outputType, (testMode != 2 ? ! navigateCmd : 2),
-	  \ testMode, output)
-    call s:PopP4Context()
+    let retVal = s:PFImpl(clearBuffer, testMode, output)
 
     " Everything else in this loop is for password support.
     if s:errCode == 0
       break
     else
-      let output = retVal
-      if output == ''
-	let output = getline(1)
+      if retVal =~# s:EMPTY_STR
+        let retVal = getline(1)
       endif
-      if output =~ 'Perforce password (P4PASSWD) invalid or unset.'
-	let g:p4Password = inputsecret("Password required for user " . s:p4User
-	      \ . ": ", s:p4Password)
-	if g:p4Password == s:p4Password
-	  unlet g:p4Password
-	  break
-	endif
-	"call s:PushP4Context()
-	call s:Initialize()
-	"call s:PopP4Context()
+      " FIXME: Works only with English as the language.
+      if retVal =~# 'Perforce password (P4PASSWD) invalid or unset.'
+        let p4Password = inputsecret("Password required for user " . s:p4User
+              \ . ": ", s:p4Password)
+        if p4Password ==# s:p4Password
+          break
+        endif
+        let s:p4Password = p4Password
       else
-	break
+        break
       endif
     endif
     let retryCount = retryCount + 1
@@ -2393,18 +2265,72 @@ function! s:PFIF(scriptOrigin, outputType, commandName, ...) range
       break
     endif
   endwhile
-  " We are doing checktime now for all commands, right in PFImpl() itself.
-  "if MvContainsElement(s:checktimeReqCmds, ',', s:p4Command)
-  "  checktime
-  "endif
-  if s:errCode != 0
-    return ''
+
+  " If the original output type was -1, then check if the output is of too
+  "   many lines to display in a dialog.
+  if a:outputType < 0 && s:outputType == 4
+    let nLines = strlen(substitute(retVal, "[^\n]", "", "g"))
+    if nLines > s:maxLinesInDialog
+      " Open the window now.
+      let s:outputType = a:outputType + 2
+      let p4Options = s:GetP4Options()
+      " We want the window to be opened even on errors, to match that of
+      "   regular behavior.
+      let errCode = s:errCode
+      try
+        let s:errCode = 0
+        if s:GotoWindow(clearBuffer, s:GetCurFileName(), 1) == 0
+          silent! put! =retVal
+          call s:InitWindow(g:p4FullCmd, p4Options)
+          " Go back and fix the current context in the stack for the change in
+          "   value of s:outputType.
+        endif
+      finally
+        let s:errCode = errCode
+      endtry
+    elseif retVal !~ s:EMPTY_STR
+      let s:outputType = 2
+      if s:errCode == 0
+        call s:ConfirmMessage(retVal, "OK", 1, "Info")
+      endif
+    endif
+    if s:errCode != 0
+      call s:CheckShellError(retVal, s:outputType)
+    endif
   endif
 
-  if s:StartBufSetup(outputType)
+  if s:errCode != 0
+    return retVal
+  endif
+
+  " outputType < 0 is used only for the top-level calls, so it is unlikely
+  "   that the stack contains multiple perforce commands (unless when the call
+  "   gets redirected through :PF), and even if it does, it is very unlikely
+  "   that they are for the same perforce command, so just check the
+  "   s:p4Command value.
+  " CAUTION: It is likely that there are multiple stack items for the same
+  "   command, but I am not going to bother about it for now.
+  if a:outputType < 0
+    if s:NumP4Contexts() > 0
+      " Temporarily switch to the callers context so that we can modify and
+      "   push it back on the stack.
+      let curCntxtStr = s:GetP4ContextVars()
+      let outputType = s:outputType
+      call s:PopP4Context()
+      if a:commandName ==# s:p4Command
+        " Correct the outputType.
+        let s:outputType = outputType
+      endif
+      call s:PushP4Context()
+      " Restore the original context.
+      call s:SetP4ContextVars(curCntxtStr)
+    endif
+  endif
+
+  if s:StartBufSetup()
     " If this command has a handler for the individual items, then enable the
     " item selection commands.
-    if s:getCommandItemHandler(0, s:p4Command, '') != ""
+    if s:getCommandItemHandler(0, s:p4Command, '') !~# s:EMPTY_STR
       call s:SetupSelectItem()
     endif
 
@@ -2413,35 +2339,35 @@ function! s:PFIF(scriptOrigin, outputType, commandName, ...) range
     endif
 
     if MvContainsElement(s:filelistCmds, ',', s:p4Command)
-      call s:SetupFileBrowse(outputType)
+      call s:SetupFileBrowse()
     endif
 
-    if s:newWindowCreated
+    if s:NewWindowCreated()
       if specMode
-	let argStr = ''
-	if s:p4Options !~ s:EMPTY_STR
-	  let argStr = CreateArgString(s:p4Options, s:SPACE_AS_SEP) . ','
-	endif
-	" It is not possible to have an s:p4Command which is in s:p4KnownCmds
-	"	  and still not be the actual intended command.
-	if MvContainsElement(s:p4KnownCmds, ',', s:p4Command)
-	  let argStr = argStr . "'" . s:p4Command . "', "
-	else
-	  " FIXME: Why am I using b:p4Command instead of s:p4Command here ???
-	  let argStr = argStr . "'" . b:p4Command . "', "
-	endif
-	if s:p4CmdOptions !~ s:EMPTY_STR
-	  let argStr = argStr . CreateArgString(s:p4CmdOptions, ' ') . ', '
-	endif
-	exec 'command! -buffer -nargs=* W :call <SID>W(0, ' . argStr .
-	      \ '<f-args>)'
-	exec 'command! -buffer -nargs=* WQ :call <SID>W(1, ' . argStr .
-	      \ '<f-args>)'
-	call s:EchoMessage("When done, save " . s:p4Command .
-	      \ " spec by using :W or :WQ command. Undo on errors.", 'None')
-	call s:PFSetupForSpec()
+        let argStr = ''
+        if s:p4Options !~# s:EMPTY_STR
+          let argStr = CreateArgString(s:p4Options, s:SPACE_AS_SEP) . ','
+        endif
+        " It is not possible to have an s:p4Command which is in s:allCommands
+        "         and still not be the actual intended command.
+        if MvContainsElement(s:allCommands, ',', s:p4Command)
+          let argStr = argStr . "'" . s:p4Command . "', "
+        else
+          " FIXME: Why am I using b:p4Command instead of s:p4Command here ???
+          let argStr = argStr . "'" . b:p4Command . "', "
+        endif
+        if s:p4CmdOptions !~# s:EMPTY_STR
+          let argStr = argStr . CreateArgString(s:p4CmdOptions, ' ') . ', '
+        endif
+        exec 'command! -buffer -nargs=* W :call <SID>W(0, ' . argStr .
+              \ '<f-args>)'
+        exec 'command! -buffer -nargs=* WQ :call <SID>W(1, ' . argStr .
+              \ '<f-args>)'
+        call s:EchoMessage("When done, save " . s:p4Command .
+              \ " spec by using :W or :WQ command. Undo on errors.", 'None')
+        call s:PFSetupForSpec()
       else " Define q to quit the read-only perforce windows (David Fishburn)
-	nnoremap <buffer> q <C-W>q
+        nnoremap <buffer> q <C-W>q
       endif
     endif
 
@@ -2451,18 +2377,87 @@ function! s:PFIF(scriptOrigin, outputType, commandName, ...) range
       nnoremap <silent> <buffer> <Tab> :call <SID>NavigateForward()<CR>
     endif
 
-    call s:EndBufSetup(outputType)
+    call s:EndBufSetup()
   endif
 
   return retVal
-endfunction " PFIF }}}
+endfunction
+
+function! s:PFComplete(ArgLead, CmdLine, CursorPos)
+  if s:p4KnownCmdsCompStr == ''
+    let s:p4KnownCmdsCompStr = substitute(s:p4KnownCmds, ',', "\n", 'g')
+  endif
+  if a:CmdLine =~ '^\s*PF '
+    let argStr = strpart(a:CmdLine, matchend(a:CmdLine, '^\s*PF '))
+    let s:p4Command = ''
+    if argStr !~# s:EMPTY_STR
+      exec 'call s:ParseOptionsIF(-1, -1, 0, 0, ' .
+            \ CreateArgString(argStr, s:SPACE_AS_SEP).')'
+    endif
+    if s:p4Command ==# '' || s:p4Command ==# a:ArgLead
+      return s:p4KnownCmdsCompStr."\n".substitute(s:builtinCmds, ',', "\n", 'g')
+    endif
+  else
+    let userCmd = substitute(a:CmdLine, '^\s*P\(.\)\(\w*\).*', '\l\1\2', '')
+    if strlen(userCmd) < 3
+      if !exists('s:shortCmdMap{userCmd}')
+        throw "Perforce internal error: no map found for short command: ".
+              \ userCmd
+      endif
+      let userCmd = s:shortCmdMap{userCmd}
+    endif
+    let s:p4Command = userCmd
+  endif
+  if s:p4Command ==# 'help'
+    return s:PHelpComplete(a:ArgLead, a:CmdLine, a:CursorPos)
+  endif
+  if MvContainsElement(s:nofileArgsCmds, ',', s:p4Command)
+    return ''
+  endif
+
+  " FIXME: Can't set command-line from user function.
+  "let argLead = UserFileExpand(a:ArgLead)
+  "if argLead !=# a:ArgLead
+  "  let cmdLine = strpart(a:CmdLine, 0, a:CursorPos-strlen(a:ArgLead)) .
+  "        \ argLead . strpart(a:CmdLine, a:CursorPos)
+  "  exec "normal! \<C-\>e'".cmdLine."'\<CR>"
+  "  call setcmdpos(a:CursorPos+(strlen(argLead) - strlen(a:ArgLead)))
+  "  return ''
+  "endif
+  if a:ArgLead =~ '^//'.s:p4Depot.'/'
+    " Get directory matches.
+    let dirMatches = s:GetOutput('dirs', a:ArgLead, "\n", '/&')
+    " Get file matches.
+    let fileMatches = s:GetOutput('files', a:ArgLead, '#\d\+[^'."\n".']\+', '')
+    if dirMatches !~ s:EMPTY_STR || fileMatches !~ s:EMPTY_STR
+      return dirMatches.fileMatches
+    else
+      return ''
+    endif
+  endif
+  return UserFileComplete(a:ArgLead, a:CmdLine, a:CursorPos, 1, '')
+endfunction
+
+function! s:GetOutput(p4Cmd, arg, pat, repl)
+  let matches = s:PFIF(0, 4, a:p4Cmd, a:arg.'*')
+  if s:errCode == 0
+    if matches =~ 'no such file(s)'
+      let matches = ''
+    else
+      let matches = substitute(substitute(matches, a:pat, a:repl, 'g'),
+            \ "\n\n", "\n", 'g')
+    endif
+  endif
+  return matches
+endfunction
+" PFIF }}}
 
 """ START: Adopted from Tom's perforce plugin. {{{
 
 "---------------------------------------------------------------------------
 " Produce string for ruler output
 function! s:P4RulerStatus()
-  if exists('b:p4RulerStr') && b:p4RulerStr != ""
+  if exists('b:p4RulerStr') && b:p4RulerStr !~# s:EMPTY_STR
     return b:p4RulerStr
   endif
   if !exists('b:p4FStatDone') || !b:p4FStatDone
@@ -2471,43 +2466,50 @@ function! s:P4RulerStatus()
 
   "let b:p4RulerStr = '[p4 '
   let b:p4RulerStr = '['
-  if exists('b:p4RulerErr') && b:p4RulerErr != ''
+  if exists('b:p4RulerErr') && b:p4RulerErr !~# s:EMPTY_STR
     let b:p4RulerStr = b:p4RulerStr . b:p4RulerErr
   elseif !exists('b:p4HaveRev')
     let b:p4RulerStr = ''
-  elseif b:p4Action == ''
-    if b:p4OtherOpen == ''
+  elseif b:p4Action =~# s:EMPTY_STR
+    if b:p4OtherOpen =~# s:EMPTY_STR
       let b:p4RulerStr = b:p4RulerStr . 'unopened'
     else
       let b:p4RulerStr = b:p4RulerStr . b:p4OtherOpen . ':' . b:p4OtherAction
     endif
   else
-    if b:p4Change == 'default'
+    if b:p4Change ==# 'default' || b:p4Change =~# s:EMPTY_STR
       let b:p4RulerStr = b:p4RulerStr . b:p4Action
     else
       let b:p4RulerStr = b:p4RulerStr . b:p4Action . ':' . b:p4Change
     endif
   endif
-  if exists('b:p4HaveRev') && b:p4HaveRev != ''
+  if exists('b:p4HaveRev') && b:p4HaveRev !~# s:EMPTY_STR
     let b:p4RulerStr = b:p4RulerStr . ' #' . b:p4HaveRev . '/' . b:p4HeadRev
   endif
 
-  if b:p4RulerStr != ''
+  if b:p4RulerStr !~# s:EMPTY_STR
     let b:p4RulerStr = b:p4RulerStr . ']'
   endif
   return b:p4RulerStr
 endfunction
 
-
 function! s:GetClientInfo()
-  let infoStr = s:PFIF(0, 4, "info")
-  if s:errCode != 0
-    return s:SyntaxError(v:errmsg)
-  endif
+  let infoStr = ''
+  call s:PushP4Context()
+  try
+    let infoStr = s:PFIF(0, 4, 'info')
+    if s:errCode != 0
+      return s:ConfirmMessage((v:errmsg != '') ? v:errmsg : infoStr, 'OK', 1,
+            \ 'Error')
+    endif
+  finally
+    call s:PopP4Context(0)
+  endtry
   let s:clientRoot = CleanupFileName(s:StrExtract(infoStr,
-	\ '\CClient root: \f\+', 13))
+        \ '\CClient root: [^'."\n".']\+', 13))
+  let s:p4Client = s:StrExtract(infoStr, '\CClient name: [^'."\n".']\+', 13)
+  let s:p4User = s:StrExtract(infoStr, '\CUser name: [^'."\n".']\+', 11)
 endfunction
-
 
 " Get/refresh filestatus for the specified buffer with optimizations.
 function! s:GetFileStatus(buf, refresh)
@@ -2522,91 +2524,102 @@ function! s:GetFileStatus(buf, refresh)
     let bufNr = bufnr(a:buf)
   endif
   if bufNr == -1 || (!a:refresh && s:optimizeActiveStatus &&
-	\ getbufvar(bufNr, "p4FStatDone"))
+        \ getbufvar(bufNr, "p4FStatDone"))
     return ""
   endif
 
   " This is an optimization by restricting status to the files under the
   "   client root only.
-  if !s:IsFileUnderDepot(expand('#'.bufNr))
+  if !s:IsFileUnderDepot(expand('#'.bufNr.':p'))
     return ""
   endif
 
   return s:GetFileStatusImpl(bufNr)
 endfunction
 
-
 function! s:ResetFileStatusForBuffer(bufNr)
-  call setbufvar(a:bufNr, 'p4FStatDone', 0)
+  " Avoid proliferating this buffer variable.
+  if getbufvar(a:bufNr, 'p4FStatDone') != 0
+    call setbufvar(a:bufNr, 'p4FStatDone', 0)
+  endif
 endfunction
-
 
 "---------------------------------------------------------------------------
 " Obtain file status information
-" TODO:
-"   By running fstat with the depot file would generate more information, but
-"     that would mean I should know the branch mapping. Unless I have a way to
-"     cache the branch mappings, running 'where' command everytime will be too
-"     slow.
 function! s:GetFileStatusImpl(bufNr)
   if bufname(a:bufNr) == ""
-    return ""
+    return ''
   endif
   let fileName = fnamemodify(bufname(a:bufNr), ':p')
   let bufNr = a:bufNr
   " If the filename matches with one of the ignore patterns, then don't do
   " status.
-  if s:ignoreDefPattern != '' && match(fileName, s:ignoreDefPattern) != -1
-    return ""
+  if s:ignoreDefPattern !~# s:EMPTY_STR &&
+        \ match(fileName, s:ignoreDefPattern) != -1
+    return ''
   endif
-  if s:ignoreUsrPattern != '' && match(fileName, s:ignoreUsrPattern) != -1
-    return ""
+  if s:ignoreUsrPattern !~# s:EMPTY_STR &&
+        \ match(fileName, s:ignoreUsrPattern) != -1
+    return ''
   endif
 
   call setbufvar(bufNr, 'p4RulerStr', '') " Let this be reconstructed.
 
-  let fileStatusStr = s:PFIF(1, 4, 'fstat', fileName)
-  call setbufvar(bufNr, 'p4FStatDone', '1')
+  " This could very well be a recursive call, so we should save the current
+  "   state.
+  call s:PushP4Context()
+  try
+    let fileStatusStr = s:PFIF(1, 4, 'fstat', fileName)
+    call setbufvar(bufNr, 'p4FStatDone', '1')
 
-  if s:errCode != 0
-    call setbufvar(bufNr, 'p4RulerErr', "<ERROR>")
-    return ""
-  endif
+    if s:errCode != 0
+      call setbufvar(bufNr, 'p4RulerErr', "<ERROR>")
+      return ''
+    endif
+  finally
+    call s:PopP4Context(0)
+  endtry
 
   if match(fileStatusStr, ' - file(s) not in client view\.') >= 0
     call setbufvar(bufNr, 'p4RulerErr', "<Not In View>")
     " Required for optimizing out in future runs.
     call setbufvar(bufNr, 'p4HeadRev', '')
-    return ""
+    return ''
   elseif match(fileStatusStr, ' - no such file(s).') >= 0
     call setbufvar(bufNr, 'p4RulerErr', "<Not In Depot>")
     " Required for optimizing out in future runs.
     call setbufvar(bufNr, 'p4HeadRev', '')
-    return ""
+    return ''
   else
     call setbufvar(bufNr, 'p4RulerErr', '')
   endif
 
   call setbufvar(bufNr, 'p4HeadRev',
-	\ s:StrExtract(fileStatusStr, '\CheadRev [0-9]\+', 8))
-  call setbufvar(bufNr, 'p4DepotFile',
-	\ s:StrExtract(fileStatusStr, '\CdepotFile \f\+', 10))
-  call setbufvar(bufNr, 'p4ClientFile',
-	\ s:StrExtract(fileStatusStr, '\CclientFile \f\+', 11))
+        \ s:StrExtract(fileStatusStr, '\CheadRev [0-9]\+', 8))
+  "call setbufvar(bufNr, 'p4DepotFile',
+  "      \ s:StrExtract(fileStatusStr, '\CdepotFile [^'."\n".']\+', 10))
+  "call setbufvar(bufNr, 'p4ClientFile',
+  "      \ s:StrExtract(fileStatusStr, '\CclientFile [^'."\n".']\+', 11))
   call setbufvar(bufNr, 'p4HaveRev',
-	\ s:StrExtract(fileStatusStr, '\ChaveRev [0-9]\+', 8))
-  call setbufvar(bufNr, 'p4Action',
-	\ s:StrExtract(fileStatusStr, '\Caction [^[:space:]]\+', 7))
-  call setbufvar(bufNr, 'p4OtherOpen',
-	\ s:StrExtract(fileStatusStr, '\CotherOpen0 [^[:space:]@]\+', 11))
-  call setbufvar(bufNr, 'p4OtherAction',
-	\ s:StrExtract(fileStatusStr, '\CotherAction0 [^[:space:]@]\+', 13))
-  call setbufvar(bufNr, 'p4Change',
-	\ s:StrExtract(fileStatusStr, '\Cchange [^[:space:]]\+', 7))
+        \ s:StrExtract(fileStatusStr, '\ChaveRev [0-9]\+', 8))
+  let headAction = s:StrExtract(fileStatusStr, '\CheadAction [^[:space:]]\+',
+        \ 11)
+  if headAction ==# 'delete'
+    call setbufvar(bufNr, 'p4Action', '<Deleted>')
+    call setbufvar(bufNr, 'p4Change', '')
+  else
+    call setbufvar(bufNr, 'p4Action',
+          \ s:StrExtract(fileStatusStr, '\Caction [^[:space:]]\+', 7))
+    call setbufvar(bufNr, 'p4OtherOpen',
+          \ s:StrExtract(fileStatusStr, '\CotherOpen0 [^[:space:]@]\+', 11))
+    call setbufvar(bufNr, 'p4OtherAction',
+          \ s:StrExtract(fileStatusStr, '\CotherAction0 [^[:space:]@]\+', 13))
+    call setbufvar(bufNr, 'p4Change',
+          \ s:StrExtract(fileStatusStr, '\Cchange [^[:space:]]\+', 7))
+  endif
 
   return fileStatusStr
 endfunction
-
 
 function! s:StrExtract(str, pat, pos)
   let part = matchstr(a:str, a:pat)
@@ -2614,27 +2627,26 @@ function! s:StrExtract(str, pat, pos)
   return part
 endfunction
 
-
 function! s:AdjustRevision(file, adjustment)
   let s:errCode = 0
   let revNum = a:adjustment
-  if revNum =~ '[-+]\d\+'
+  if revNum =~# '[-+]\d\+'
     let revNum = substitute(revNum, '^+', '', '')
-    if getbufvar(a:file, 'p4HeadRev') == ''
+    if getbufvar(a:file, 'p4HeadRev') =~# s:EMPTY_STR
       " If fstat is not done yet, do it now.
       call s:GetFileStatus(a:file, 1)
-      if getbufvar(a:file, 'p4HeadRev') == ''
-	call s:EchoMessage("Current revision is not available. " .
-	      \ "To be able to use negative revisions, see help on " .
-	      \ "'perforce-active-status'.", 'Error')
-	let s:errCode = 1
-	return -1
+      if getbufvar(a:file, 'p4HeadRev') =~# s:EMPTY_STR
+        call s:EchoMessage("Current revision is not available. " .
+              \ "To be able to use negative revisions, see help on " .
+              \ "'perforce-active-status'.", 'Error')
+        let s:errCode = 1
+        return -1
       endif
     endif
     let revNum = getbufvar(a:file, 'p4HaveRev') + revNum
     if revNum < 1
       call s:EchoMessage("Not that many revisions available. Try again " .
-	    \ "using PRefreshFileStatus command.", 'Error')
+            \ "after running PFRefreshFileStatus command.", 'Error')
       let s:errCode = 1
       return -1
     endif
@@ -2653,9 +2665,12 @@ function! s:IsCurrent()
   endif
 endfunction
 
-
 function! s:CheckOutFile()
-  if ! s:promptToCheckout || ! s:IsFileUnderDepot(expand("%"))
+  if ! s:promptToCheckout || ! s:IsFileUnderDepot(expand('%:p'))
+    return
+  endif
+  " If we know that the file is deleted from the depot, don't prompt.
+  if exists('b:p4Action') && b:p4Action == '<Deleted>'
     return
   endif
 
@@ -2663,25 +2678,36 @@ function! s:CheckOutFile()
     let option = s:ConfirmMessage("Readonly file, do you want to checkout " .
           \ "from perforce?", "&Yes\n&No", s:checkOutDefault, "Question")
     if option == 1
-      call s:PFIF(1, 21, 'edit')
+      call s:PFIF(1, -1, 'edit')
       if ! s:errCode
-	" You need to explicitly execute this autocommand to get the change
-	"   detected and for other events (such as BufRead) to get fired. This
-	"   was suggested by Bram.
-	" The currentCommand by now must have got reset, so we need to
-	"   explicitly set it and finally reset it.
-	let currentCommand = s:currentCommand
-	try
-	  let s:currentCommand = 'edit'
-	  exec "doautocmd FileChangedShell " . expand('%')
-	finally
-	  let s:currentCommand = currentCommand
-	endtry
+        " You need to explicitly execute this autocommand to get the change
+        "   detected and for other events (such as BufRead) to get fired. This
+        "   was suggested by Bram.
+        " The currentCommand by now must have got reset, so we need to
+        "   explicitly set it and finally reset it.
+        let currentCommand = s:currentCommand
+        try
+          let s:currentCommand = 'edit'
+          if s:enableFileChangedShell
+            call DefFCShellInstall()
+          endif
+          let curOnLastCol = (col('.') == col('$'))
+          doautocmd FileChangedShell
+          if curOnLastCol
+            " Workaround from Benji to positiont the cursor correctly if the
+            "   checkout was initiated with "A" command.
+            stopinsert | startinsert!
+          endif
+        finally
+          if s:enableFileChangedShell
+            call DefFCShellUninstall()
+          endif
+          let s:currentCommand = currentCommand
+        endtry
       endif
     endif
   endif
 endfunction
-
 
 function! s:FileChangedShell()
   if s:activeStatusEnabled
@@ -2703,171 +2729,149 @@ endfunction
 " Assumes that the arguments are already parsed and are ready to be used in
 "   the script variables.
 " Low level interface with the p4 command.
-" outputType (string):
-"   0 - Execute p4 and place the output in a new window.
-"   1 - Same as above, but use preview window.
-"   2 - Execute p4 and show the output in a dialog for confirmation.
-"   3 - Execute p4 and echo the output.
-"   4 - Execute p4 and return the output.
-"   5 - Execute p4 no output expected. Essentially same as 4 when the current
-"	commandMode doesn't produce any output, just for clarification.
-"  20 - Execute p4 and if the output is less than s:maxLinesInDialog number of
-"	lines, display a dialog (mode 2), otherwise display in a new window
-"	(mode 0)
-"  21 - Same as 20, use mode 1 instead of 0.
-" clearBuffer (boolean): If the buffer contents should be cleared before
-"     adding the new output.
+" clearBuffer: If the buffer contents should be cleared before
+"     adding the new output (See s:GotoWindow).
 " testMode (number):
 "   0 - Run normally.
-"   1 - debugging, display the command-line instead of the actual output..
-"   2 - testing, ignore.
+"   1 - testing, ignore.
+"   2 - debugging, display the command-line instead of the actual output..
 " Returns the output if available. If there is any error, the error code will
 "   be available in s:errCode variable.
-function! s:PFImpl(outputType, clearBuffer, testMode, output) " {{{
-  " FIXME: Work-around.
-  let _newWindowCreated = s:newWindowCreated
-  let s:newWindowCreated = 0
+function! s:PFImpl(clearBuffer, testMode, output) " {{{
   try " [-2f]
-  let s:recLevel = s:recLevel + 1
 
-  let outputType = a:outputType
   let s:errCode = 0
-
   let fullCmd = ''
+  let p4Options = ''
   if s:commandMode != s:CM_DISPLAY
-    let fullCmd = s:MakeP4Cmd()
+    let p4Options = s:GetP4Options()
+    let fullCmd = s:CreateFullCmd(s:MakeP4CmdString(p4Options))
   endif
-  " save the name of the current file.
-  let p4CurFileName = expand("%")
+  " Save the name of the current file.
+  let p4OrgFileName = s:GetCurFileName()
+
+  let s:currentCommand = ''
+  " Make sure all the already existing changes are detected. We don't have
+  "     s:currentCommand set here, so the user will get an appropriate prompt.
+  checktime
 
   " If the output has to be shown in a window, position cursor appropriately,
   " creating a new window if required.
   let v:errmsg = ""
   " Ignore outputType in this case.
   if s:commandMode != s:CM_PIPE && s:commandMode != s:CM_FILTER
-    if outputType == 0 || outputType == 1
-      call s:GotoWindow(outputType, a:clearBuffer, p4CurFileName)
+    if s:outputType == 0 || s:outputType == 1
+      call s:GotoWindow(a:clearBuffer, p4OrgFileName, 0)
     endif
   endif
 
-  let output = ""
-  if ! a:testMode && s:errCode == 0
-    let s:currentCommand = ''
-    " Make sure all the already existing changes are detected. We don't have
-    "	s:currentCommand set here, so the user will get an appropriate prompt.
-    checktime
-    let s:currentCommand = s:p4Command
-    try
-      if s:commandMode == s:CM_RUN
-	" If we are placing the output in a new window, then we should avoid
-	"   system() for performance reasons, imagine doing a 'print' on a
-	"   huge file.
-	" These two outputType's correspond to placing the output in a window.
-	if outputType != 0 && outputType != 1
-	  let output = s:System(fullCmd, a:outputType)
-	else
-	  exec '.call s:Filter(fullCmd, a:outputType, 1)'
-	  let output = ""
-	endif
-      elseif s:commandMode == s:CM_FILTER
-	exec s:filterRange . 'call s:Filter(fullCmd, a:outputType, 1)'
-      elseif s:commandMode == s:CM_PIPE
-	exec s:filterRange . 'call s:Filter(fullCmd, a:outputType, 2)'
-      elseif s:commandMode == s:CM_DISPLAY
-	let output = a:output
-      endif
-      " Detect any new changes to the loaded buffers.
-      " CAUTION: This actually results in a reentrant call back to this
-      "   function, but our Push/Pop mechanism for the context should take
-      "   care of it.
-      checktime
-    finally
-      let s:currentCommand = ''
-    endtry
-  elseif a:testMode != 2
-    let output = fullCmd
-  endif
-
+  let output = ''
   if s:errCode == 0
-    if outputType == 20 || outputType == 21
-      let nLines = strlen(substitute(output, "[^\n]", "", "g"))
-      if nLines > s:maxLinesInDialog
-	" Open the window now.
-	let outputType = outputType - 20
-	call s:GotoWindow(outputType, a:clearBuffer, p4CurFileName)
-      else
-	let outputType = 2
+    if ! a:testMode
+      let s:currentCommand = s:p4Command
+      if s:enableFileChangedShell
+        call DefFCShellInstall()
       endif
+
+      try
+        if s:commandMode ==# s:CM_RUN
+          " If we are placing the output in a new window, then we should avoid
+          "   system() for performance reasons, imagine doing a 'print' on a
+          "   huge file.
+          " These two outputType's correspond to placing the output in a window.
+          if s:outputType != 0 && s:outputType != 1
+            let output = s:System(fullCmd)
+          else
+            exec '.call s:Filter(fullCmd, 1)'
+            let output = ''
+          endif
+        elseif s:commandMode ==# s:CM_FILTER
+          exec s:filterRange . 'call s:Filter(fullCmd, 1)'
+        elseif s:commandMode ==# s:CM_PIPE
+          exec s:filterRange . 'call s:Filter(fullCmd, 2)'
+        elseif s:commandMode ==# s:CM_DISPLAY
+          let output = a:output
+        endif
+        " Detect any new changes to the loaded buffers.
+        " CAUTION: This actually results in a reentrant call back to this
+        "   function, but our Push/Pop mechanism for the context should take
+        "   care of it.
+        checktime
+      finally
+        if s:enableFileChangedShell
+          call DefFCShellUninstall()
+        endif
+        let s:currentCommand = ''
+      endtry
+    elseif a:testMode != 1
+      let output = fullCmd
     endif
 
     let v:errmsg = ""
     " If we have non-null output, then handling it is still pending.
-    if output != ''
+    if output !~# s:EMPTY_STR
       " If the output has to be shown in a dialog, bring up a dialog with the
       "   output, otherwise show it in the current window.
-      if outputType == 0 || outputType == 1
-	silent! put! =output
-      elseif outputType == 2
-	call s:ConfirmMessage(output, "OK", 1, "Info")
-      elseif outputType == 3
-	echo output
-      elseif outputType == 4
-	" Do nothing we will just return it.
+      if s:outputType == 0 || s:outputType == 1
+        silent! put! =output
+      elseif s:outputType == 2
+        call s:ConfirmMessage(output, "OK", 1, "Info")
+      elseif s:outputType == 3
+        echo output
+      elseif s:outputType == 4
+        " Do nothing we will just return it.
       endif
     endif
   endif
   return output
 
   finally " [+2s]
-    if s:newWindowCreated
-      call s:PFSetupBuf(expand('%'))
-      let b:p4Command = s:p4Command
-      let b:p4Options = s:p4Options
-      let b:p4FullCmd = fullCmd
-      if outputType == 1
-	wincmd p
-      endif
-    endif
-    if s:recLevel > 1
-      let s:newWindowCreated = _newWindowCreated
-    endif
-    let s:recLevel = s:recLevel - 1
+    call s:InitWindow(fullCmd, p4Options)
   endtry
 endfunction " }}}
 
-" External command execution {{{
-
-let s:ST_WIN_CMD = 0 | let s:ST_WIN_SH = 1 | let s:ST_UNIX = 2
-function! s:GetShellEnvType()
-  " When 'shellslash' option is available, then the platform must be one of
-  "	those that support '\' as a pathsep.
-  if exists('+shellslash')
-    if stridx(&shell, 'cmd.exe') != -1 ||
-	  \ stridx(&shell, 'command.com') != -1
-      return s:ST_WIN_CMD
-    else
-      return s:ST_WIN_SH
-    endif
+function! s:NewWindowCreated()
+  if (s:outputType == 0 || s:outputType == 1) && s:errCode == 0 &&
+        \ (s:commandMode ==# s:CM_RUN || s:commandMode ==# s:CM_DISPLAY)
+    return 1
   else
-    return s:ST_UNIX
+    return 0
   endif
 endfunction
 
-function! s:System(fullCmd, outputType)
-  return s:ExecCmd(a:fullCmd, a:outputType, 0)
+function! s:InitWindow(fullCmd, p4Options)
+  if s:NewWindowCreated()
+    let b:p4Command = s:p4Command
+    let b:p4Options = a:p4Options
+    let b:p4FullCmd = a:fullCmd
+    " Remove any ^M's at the end (for windows), without corrupting the search
+    " register or its history.
+    call SilentSubstitute("\<CR>$", '%s///e')
+    setlocal nomodifiable
+    setlocal nomodified
+ 
+    if s:outputType == 1
+      wincmd p
+    endif
+  endif
 endfunction
 
-function! s:Filter(fullCmd, outputType, mode) range
+" External command execution {{{
+
+function! s:System(fullCmd)
+  return s:ExecCmd(a:fullCmd, 0)
+endfunction
+
+function! s:Filter(fullCmd, mode) range
   " For command-line, we need to protect '%', '#' and '!' chars, even if they
   "   are in quotes, to avoid getting expanded by Vim before invoking external
   "   cmd.
   let fullCmd = Escape(a:fullCmd, '%#!')
   exec a:firstline.",".a:lastline.
-	\ "call s:ExecCmd(fullCmd, a:outputType, a:mode)"
+        \ "call s:ExecCmd(fullCmd, a:mode)"
 endfunction
 
-function! s:ExecCmd(fullCmd, outputType, mode) range
-  let shellEnvType = s:GetShellEnvType()
+function! s:ExecCmd(fullCmd, mode) range
   let v:errmsg = ''
   let output = ''
   try
@@ -2880,106 +2884,91 @@ function! s:ExecCmd(fullCmd, outputType, mode) range
       silent! exec a:firstline.",".a:lastline."write !".a:fullCmd
     endif
 
-    call s:CheckShellError(output, a:outputType)
+    call s:CheckShellError(output, s:outputType)
     return output
   catch /^Vim\%((\a\+)\)\=:E/ " 48[2-5]
     let v:errmsg = substitute(v:exception, '^[^:]\+:', '', '')
-    call s:CheckShellError(output, a:outputType)
+    call s:CheckShellError(output, s:outputType)
   catch /^Vim:Interrupt$/
     let s:errCode = 1
+    let v:errmsg = 'Interrupted'
   catch " Ignore.
   endtry
 endfunction
 
-" Creates the actual p4 command that can be executed using system().
-function! s:MakeP4Cmd()
-  let addOptions = s:defaultOptions . ' '
-  if s:p4Client != "" &&
-	\ !MvContainsElement(s:p4Options, s:SPACE_AS_SEP, '-c', ' ')
-    let addOptions = addOptions . '-c ' . s:p4Client . ' '
+function! s:EvalExpr(expr, def)
+  let result = a:def
+  if a:expr !~# s:EMPTY_STR
+    exec "let result = " . a:expr
   endif
-  if s:p4User != "" &&
-	\ !MvContainsElement(s:p4Options, s:SPACE_AS_SEP, '-u', ' ')
-    let addOptions = addOptions . '-u ' . s:p4User . ' '
-  endif
-  if s:p4Port != "" &&
-	\ !MvContainsElement(s:p4Options, s:SPACE_AS_SEP, '-p', ' ')
-    let addOptions = addOptions . '-p ' . s:p4Port . ' '
-  endif
-  if s:p4Password != "" &&
-	\ !MvContainsElement(s:p4Options, s:SPACE_AS_SEP, '-P', ' ')
-    let addOptions = addOptions . '-P ' . s:p4Password
-  endif
-  
-  return s:CreateFullCmd(s:MakeP4CmdString(addOptions))
+  return result
 endfunction
 
-" - For windoze+native, use double-quotes to sorround the arguments and for
-"   embedded double-quotes, just double them.
-" - For windoze+sh, use single-quotes to sorround the aruments and for embedded
-"   single-quotes, just replace them with '""'""' (if 'shq' or 'sxq' is a
-"   double-quote) and just '"'"' otherwise. Embedded double-quotes also need
-"   to be doubled.
-" - For Unix+sh, use single-quotes to sorround the arguments and for embedded
-"   single-quotes, just replace them with '"'"'. 
-function! s:CreateFullCmd(cmd)
-  let fullCmd = a:cmd
-  " I am only worried about passing arguments with spaces as they are to the
-  "   external commands, I currently don't care about back-slashes
-  "   (backslashes are normally expected only on windows when 'shellslash'
-  "   option is set, but even then the 'shell' is expected to take care of
-  "   them.). However, for cygwin bash, there is a loss of one level
-  "   of the back-slashes somewhere in the chain of execution (most probably
-  "   between CreateProcess() and cygwin?), so we need to double them.
-  let shellEnvType = s:GetShellEnvType()
-  if shellEnvType == s:ST_WIN_CMD
-    let quoteChar = '"'
-    " Escape the existing double-quotes (by doubling them).
-    let fullCmd = substitute(fullCmd, '"', '""', 'g')
-  else
-    let quoteChar = "'"
-    if shellEnvType == s:ST_WIN_SH
-      " Escape the existing double-quotes (by doubling them).
-      let fullCmd = substitute(fullCmd, '"', '""', 'g')
-    endif
-    " Take care of existing single-quotes (by exposing them, as you can't have
-    "	single-quotes inside a single-quoted string).
-    if &shellquote == '"' || &shellxquote == '"'
-      let squoteRepl = "'\"\"'\"\"'"
-    else
-      let squoteRepl = "'\"'\"'"
-    endif
-    let fullCmd = substitute(fullCmd, "'", squoteRepl, 'g')
+function! s:GetP4Options()
+  let addOptions = ''
+
+  " If there are duplicates, perfore takes the first option, so let
+  "   s:p4Options or b:p4Options come before s:defaultOptions.
+  " LIMITATATION: We choose either s:p4Options or b:p4Options only. But this
+  "   shouldn't be a big issue as this feature is meant for executing more
+  "   commands on the p4 result windows only.
+  if s:p4Options !~# s:EMPTY_STR
+    let addOptions = addOptions . s:p4Options . ' '
+  elseif exists('b:p4Options') && b:p4Options !~# s:EMPTY_STR
+    let addOptions = addOptions . b:p4Options . ' '
   endif
 
-  " Now sorround the arguments with quotes, considering the protected
-  "   spaces.
-  let fullCmd = substitute(fullCmd,
-	\ '\%(^\)\@<!\(\%([^ ]\|\\\@<=\%(\\\\\)* \)\+\)',
-	\ quoteChar.'\1'.quoteChar, 'g')
-  " We delay adding pipe part so that we can avoid the above processing.
-  let fullCmd = fullCmd . ' ' . s:p4Pipe 
-  let fullCmd = UnEscape(fullCmd, ' ') " Unescape just the spaces.
-  let fullCmd = s:p4CommandPrefix . s:p4CmdPath . ' ' . fullCmd
-  if shellEnvType == s:ST_WIN_SH && &shell =~ '\<bash\>'
-    let fullCmd = substitute(fullCmd, '\\', '\\\\', 'g')
-  endif
-  let g:p4FullCmd = fullCmd " Debug.
+  let addOptions = addOptions . s:defaultOptions . ' '
+
+  let p4Client = s:p4Client
+  let p4User = s:p4User
+  let p4Port = s:p4Port
+  try
+    if s:p4Port !=# 'P4CONFIG'
+      if s:curPresetExpr !~# s:EMPTY_STR
+        let preset = s:EvalExpr(s:curPresetExpr, '')
+        if preset ~= s:EMPTY_STR
+          call s:PFSwitch(0, preset)
+        endif
+      endif
+
+      if s:p4Client !~# s:EMPTY_STR &&
+            \ !MvContainsElement(addOptions, s:SPACE_AS_SEP, '-c', ' ')
+        let addOptions = addOptions . '-c ' . s:p4Client . ' '
+      endif
+      if s:p4User !~# s:EMPTY_STR &&
+            \ !MvContainsElement(addOptions, s:SPACE_AS_SEP, '-u', ' ')
+        let addOptions = addOptions . '-u ' . s:p4User . ' '
+      endif
+      if s:p4Port !~# s:EMPTY_STR &&
+            \ !MvContainsElement(addOptions, s:SPACE_AS_SEP, '-p', ' ')
+        let addOptions = addOptions . '-p ' . s:p4Port . ' '
+      endif
+      " Don't pass password with '-P' option, it will be too open (ps will show
+      "   it up).
+      let $P4PASSWD = s:p4Password
+    else
+    endif
+  finally
+    let s:p4Client = p4Client
+    let s:p4User = p4User
+    let s:p4Port = p4Port
+  endtry
+  
+  return addOptions
+endfunction
+
+function! s:CreateFullCmd(cmd)
+  let fullCmd = EscapeCommand(s:p4CommandPrefix . s:p4CmdPath, a:cmd, s:p4Pipe)
+  let g:p4FullCmd = fullCmd
   return fullCmd
 endfunction
 
 " Generates a command string as the user typed, using the script variables.
-function! s:MakeP4CmdString(p4DefOptions)
+function! s:MakeP4CmdString(p4Options)
   let opts = ''
-  if s:p4Options !~ s:EMPTY_STR
-    let opts = s:p4Options . ' '
-  elseif exists('b:p4Options') && b:p4Options !~ s:EMPTY_STR
-    let opts = b:p4Options . ' '
-  endif
-  " If there are duplicates, perfore takes the first option, so let opts come
-  "   before p4DefOptions.
-  let cmdStr = opts . a:p4DefOptions . ' ' . s:p4Command . ' ' . s:p4CmdOptions
-	\ . ' ' . s:p4Arguments
+  let cmdStr = opts . a:p4Options . ' ' . s:p4Command . ' ' . s:p4CmdOptions
+        \ . ' ' . s:p4Arguments
   " Consolidate multiple consecutive spaces into one. 
   let cmdStr = s:CleanSpaces(cmdStr)
   " Remove the protection from the characters that we treat specially (Note: #
@@ -2998,13 +2987,13 @@ function! s:CheckShellError(output, outputType)
     if v:errmsg != ''
       let output = output . "\n" . "errmsg = " . v:errmsg
     endif
-    " When commandMode == s:CM_RUN, the error message may already be there in
-    "	the current window.
-    if a:output != ''
+    " When commandMode ==# s:CM_RUN, the error message may already be there in
+    "   the current window.
+    if a:output !~# s:EMPTY_STR
       let output = output . "\n" . a:output
-    elseif a:output == "" &&
-	  \ (s:commandMode == s:CM_RUN && line('$') == 1 && col('$') == 1)
-      let output = output . "\n" .
+    elseif a:output =~# s:EMPTY_STR &&
+          \ (s:commandMode ==# s:CM_RUN && line('$') == 1 && col('$') == 1)
+      let output = output . "\n\n" .
             \ "Check if your 'shellredir' option captures error messages."
     endif
     call s:ConfirmMessage(output, "OK", 1, "Error")
@@ -3017,66 +3006,92 @@ endfunction
 
 " Push/Pop/Peek context {{{
 function! s:PushP4Context()
-  let contextString = ""
-  let contextString = MvAddElement(contextString, s:p4ContextItemSeparator,
-	\ s:p4Options)
-  let contextString = MvAddElement(contextString, s:p4ContextItemSeparator,
-	\ s:p4Command)
-  let contextString = MvAddElement(contextString, s:p4ContextItemSeparator,
-	\ s:p4CmdOptions)
-  let contextString = MvAddElement(contextString, s:p4ContextItemSeparator,
-	\ s:p4Arguments)
-  let contextString = MvAddElement(contextString, s:p4ContextItemSeparator,
-	\ s:p4Pipe)
-  let contextString = MvAddElement(contextString, s:p4ContextItemSeparator,
-	\ s:p4WinName)
-  let contextString = MvAddElement(contextString, s:p4ContextItemSeparator,
-	\ s:commandMode)
-  let contextString = MvAddElement(contextString, s:p4ContextItemSeparator,
-	\ s:filterRange)
-  "let contextString = MvAddElement(contextString, s:p4ContextItemSeparator,
-  "	\ s:newWindowCreated)
+  let contextString = s:GetP4ContextVars()
   let s:p4Contexts = MvAddElement(s:p4Contexts, s:p4ContextSeparator,
-	\ contextString)
+        \ contextString)
 endfunction
 
 function! s:PeekP4Context()
-  call s:PopP4ContextImpl(1)
+  return s:PopP4ContextImpl(1, 1)
 endfunction
 
-function! s:PopP4Context()
-  call s:PopP4ContextImpl(0)
+function! s:PopP4Context(...)
+  " By default carry forward error.
+  return s:PopP4ContextImpl(0, (a:0 ? a:1 : 1))
 endfunction
 
-function! s:PopP4ContextImpl(peek)
+function! s:NumP4Contexts()
+  return MvNumberOfElements(s:p4Contexts, s:p4ContextSeparator)
+endfunction
+
+function! s:PopP4ContextImpl(peek, carryFwdErr)
   let nContexts = MvNumberOfElements(s:p4Contexts, s:p4ContextSeparator)
   if nContexts <= 0
     echoerr "PopP4Context: Contexts stack is empty"
     return
   endif
   let contextString = MvElementAt(s:p4Contexts, s:p4ContextSeparator,
-	\ nContexts - 1)
+        \ nContexts - 1)
   if !a:peek
     let s:p4Contexts = MvRemoveElementAt(s:p4Contexts, s:p4ContextSeparator,
-	  \ nContexts - 1)
+          \ nContexts - 1)
   endif
 
-  call MvIterCreate(contextString, s:p4ContextItemSeparator, "PopP4Context")
-  let s:p4Options = MvIterNext("PopP4Context")
-  let s:p4Command = MvIterNext("PopP4Context")
-  let s:p4CmdOptions = MvIterNext("PopP4Context")
-  let s:p4Arguments = MvIterNext("PopP4Context")
-  let s:p4Pipe = MvIterNext("PopP4Context")
-  let s:p4WinName = MvIterNext("PopP4Context")
-  let s:commandMode = MvIterNext("PopP4Context")
-  let s:filterRange = MvIterNext("PopP4Context")
-  "let s:newWindowCreated = MvIterNext("PopP4Context")
-  call MvIterDestroy("PopP4Context")
+  call s:SetP4ContextVars(contextString, a:carryFwdErr)
+  return contextString
+endfunction
+
+" Serialize p4 context variables.
+function! s:GetP4ContextVars()
+  let contextString = ""
+  let contextString = MvAddElement(contextString, s:p4ContextItemSeparator,
+        \ s:p4Options)
+  let contextString = MvAddElement(contextString, s:p4ContextItemSeparator,
+        \ s:p4Command)
+  let contextString = MvAddElement(contextString, s:p4ContextItemSeparator,
+        \ s:p4CmdOptions)
+  let contextString = MvAddElement(contextString, s:p4ContextItemSeparator,
+        \ s:p4Arguments)
+  let contextString = MvAddElement(contextString, s:p4ContextItemSeparator,
+        \ s:p4Pipe)
+  let contextString = MvAddElement(contextString, s:p4ContextItemSeparator,
+        \ s:p4WinName)
+  let contextString = MvAddElement(contextString, s:p4ContextItemSeparator,
+        \ s:commandMode)
+  let contextString = MvAddElement(contextString, s:p4ContextItemSeparator,
+        \ s:filterRange)
+  let contextString = MvAddElement(contextString, s:p4ContextItemSeparator,
+        \ s:outputType)
+  let contextString = MvAddElement(contextString, s:p4ContextItemSeparator,
+        \ s:errCode)
+  return contextString
+endfunction
+
+" De-serialize p4 context variables.
+function! s:SetP4ContextVars(contextString, ...)
+  let carryFwdErr = 0
+  if a:0 && a:1
+    let carryFwdErr = s:errCode
+  endif
+
+  let contextString = a:contextString
+  call MvIterCreate(contextString, s:p4ContextItemSeparator, "SetP4ContextVars")
+  let s:p4Options = MvIterNext("SetP4ContextVars")
+  let s:p4Command = MvIterNext("SetP4ContextVars")
+  let s:p4CmdOptions = MvIterNext("SetP4ContextVars")
+  let s:p4Arguments = MvIterNext("SetP4ContextVars")
+  let s:p4Pipe = MvIterNext("SetP4ContextVars")
+  let s:p4WinName = MvIterNext("SetP4ContextVars")
+  let s:commandMode = MvIterNext("SetP4ContextVars")
+  let s:filterRange = MvIterNext("SetP4ContextVars")
+  let s:outputType = MvIterNext("SetP4ContextVars")
+  let s:errCode = MvIterNext("SetP4ContextVars") + carryFwdErr
+  call MvIterDestroy("SetP4ContextVars")
 endfunction
 " Push/Pop/Peek context }}}
 
 """ BEGIN: Argument parsing {{{
-function! s:ResetP4Vars()
+function! s:ResetP4ContextVars()
   " Syntax is:
   "   PF <p4Options> <p4Command> <p4CmdOptions> <p4Arguments> | <p4Pipe>
   " Ex: PF -c hari integrate -b branch -s <fromFile> <toFile>
@@ -3089,27 +3104,28 @@ function! s:ResetP4Vars()
   " commandMode:
   "   run - Execute p4 using system() or its equivalent.
   "   filter - Execute p4 as a filter for the current window contents. Use
-  "	       commandPrefix to restrict the filter range.
+  "            commandPrefix to restrict the filter range.
   "   display - Don't execute p4. The output is already passed in.
   let s:commandMode = "run"
   let s:filterRange = ""
-
-  " The command that is currently being executed. Used to determine autoread.
-  let s:currentCommand = ''
+  let s:outputType = 0
   let s:errCode = 0
-  " FIXME: Strictly speaking this should be part of the context, but
-  "   currently, the context gets generated by the ParseOptions() function,
-  "   which doesn't know about this. For now, this is being worked-around by
-  "   explicitly saving and restoring everytime in PFIF() function (before the
-  "   ParseOptions() can get a chance to overwrite it).
-  let s:newWindowCreated = 0
 endfunction
-call s:ResetP4Vars() " Let them get initialized the first time.
+call s:ResetP4ContextVars() " Let them get initialized the first time.
 
 " Parses the arguments into 4 parts, "options to p4", "p4 command",
 " "options to p4 command", "actual arguments". Also generates the window name.
-function! s:ParseOptions(fline, lline, ...) " range
-  call s:ResetP4Vars()
+" outputType (string):
+"   0 - Execute p4 and place the output in a new window.
+"   1 - Same as above, but use preview window.
+"   2 - Execute p4 and show the output in a dialog for confirmation.
+"   3 - Execute p4 and echo the output.
+"   4 - Execute p4 and return the output.
+"   5 - Execute p4 no output expected. Essentially same as 4 when the current
+"       commandMode doesn't produce any output, just for clarification.
+function! s:ParseOptions(fline, lline, outputType, ...) " range
+  call s:ResetP4ContextVars()
+  let s:outputType = a:outputType
   if a:0 == 0
     return
   endif
@@ -3122,107 +3138,142 @@ function! s:ParseOptions(fline, lline, ...) " range
   while i <= a:0
     try " Just for the sake of loop variables. [-2f]
 
-    if s:pendingPipeArg != ''
+    if s:pendingPipeArg !~# s:EMPTY_STR
       let curArg = s:pendingPipeArg
       let s:pendingPipeArg = ''
-    elseif s:p4Pipe == ''
+    elseif s:p4Pipe =~# s:EMPTY_STR
       let curArg = a:{i}
+      " The user can't specify a null string on the command-line, this is an
+      "   argument originating from the script, so just ignore it (just for
+      "   the sake of convenience, see PChangesDiff for a possibility).
+      if curArg == ''
+        continue
+      endif
       let pipeIndex = match(curArg, '\\\@<!\%(\\\\\)*\zs|')
       if pipeIndex != -1
-	let pipePart = strpart(curArg, pipeIndex)
-	let p4Part = strpart(curArg, 0, pipeIndex)
-	if p4Part !~ s:EMPTY_STR
-	  let curArg = p4Part
-	  let s:pendingPipeArg = pipePart
-	else
-	  let curArg = pipePart
-	endif
+        let pipePart = strpart(curArg, pipeIndex)
+        let p4Part = strpart(curArg, 0, pipeIndex)
+        if p4Part !~# s:EMPTY_STR
+          let curArg = p4Part
+          let s:pendingPipeArg = pipePart
+        else
+          let curArg = pipePart
+        endif
       endif
     else
       let curArg = a:{i}
     endif
 
-    " Escape the embedded spaces such that only the spaces between them are
-    " left unprotected.
-    let curArg = s:Escape(curArg)
+    " As we use custom completion mode, the filename meta-sequences in the
+    "   arguments will not be expanded by Vim automatically, so we need to
+    "   expand them manually here. On the other hand, this provides us control
+    "   on what to expand, so we can avoid expanding perforce file revision
+    "   numbers as buffernames (escaping is no longer required by the user on
+    "   the commandline).
+    let fileRev = ''
+    let fileRevIndex = match(curArg, '#\(\d\+\|none\|head\|have\)$')
+    if fileRevIndex != -1
+      let fileRev = strpart(curArg, fileRevIndex)
+      let curArg = strpart(curArg, 0, fileRevIndex)
+    endif
+    if curArg != ''
+      let curArg = UserFileExpand(curArg)
+    endif
+    if fileRev != ''
+      let curArg = curArg.fileRev
+    endif
+    " Escape the spaces in the arguments such that only the spaces between
+    "   them are left unprotected.
+    let curArg = Escape(curArg, ' ')
 
-    if curArg =~ '^|' || s:p4Pipe != ''
+    if curArg =~# '^|' || s:p4Pipe !~# s:EMPTY_STR
       let s:p4Pipe = s:p4Pipe . ' ' . curArg
       continue
     endif
 
     if ! s:IsAnOption(curArg) " If not an option.
-      if s:p4Command == "" && MvContainsPattern(s:p4KnownCmds, ',', curArg)
-	" If the previous one was an option to p4 that takes in an argument.
-	if prevArg =~ '^-[cCdHLpPux]$' || prevArg =~ '^+o$' " See :PH usage.
-	  let s:p4Options = s:p4Options . ' ' . curArg
-	else
-	  let s:p4Command = curArg
-	endif
+      if s:p4Command =~# s:EMPTY_STR &&
+            \ MvContainsElement(s:allCommands, ',', curArg)
+        " If the previous one was an option to p4 that takes in an argument.
+        if prevArg =~# '^-[cCdHLpPux]$' || prevArg =~# '^++o$' " See :PH usage.
+          let s:p4Options = s:p4Options . ' ' . curArg
+          if prevArg ==# '++o' && (curArg == '0' || curArg == 1)
+            let s:outputType = curArg
+          endif
+        else
+          let s:p4Command = curArg
+        endif
       else " Argument is not a perforce command.
-        if s:p4Command == ""
+        if s:p4Command =~# s:EMPTY_STR
           let s:p4Options = s:p4Options . ' ' . curArg
         else
-	  let optArg = 0
-	  " Look for options that have an argument, so we can collect this
-	  " into p4CmdOptions instead of p4Arguments.
-	  if s:p4Arguments == "" && s:IsAnOption(prevArg)
-	    " We could as well just check for the option here, but combining
-	    " this with the command name will increase the accuracy of finding
-	    " the starting point for p4Arguments.
-	    if (prevArg[0] == '-' && exists('s:p4OptCmdMap{prevArg[1]}') &&
-		  \ MvContainsElement(s:p4OptCmdMap{prevArg[1]}, ',',
-		    \ s:p4Command)) ||
-	     \ (prevArg[0] == '+' && exists('s:biOptCmdMap{prevArg[1]}') &&
-		  \ MvContainsElement(s:biOptCmdMap{prevArg[1]}, ',',
-		    \ s:p4Command))
-	      let optArg = 1
-	    endif
-	  endif
+          let optArg = 0
+          " Look for options that have an argument, so we can collect this
+          " into p4CmdOptions instead of p4Arguments.
+          if s:p4Arguments =~# s:EMPTY_STR && s:IsAnOption(prevArg)
+            " We could as well just check for the option here, but combining
+            " this with the command name will increase the accuracy of finding
+            " the starting point for p4Arguments.
+            if (prevArg[0] ==# '-' && exists('s:p4OptCmdMap{prevArg[1]}') &&
+                  \ MvContainsElement(s:p4OptCmdMap{prevArg[1]}, ',',
+                    \ s:p4Command)) ||
+             \ (prevArg =~# '^++' && exists('s:biOptCmdMap{prevArg[2]}') &&
+                  \ MvContainsElement(s:biOptCmdMap{prevArg[2]}, ',',
+                    \ s:p4Command))
+              let optArg = 1
+            endif
+          endif
 
-	  if optArg
-	    let s:p4CmdOptions = s:p4CmdOptions . ' ' . curArg
-	  else
-	    let s:p4Arguments = s:p4Arguments . ' ' . curArg
-	  endif
+          if optArg
+            let s:p4CmdOptions = s:p4CmdOptions . ' ' . curArg
+          else
+            let s:p4Arguments = s:p4Arguments . ' ' . curArg
+          endif
         endif
       endif
     else
-      if s:p4Arguments == ""
-	if s:p4Command == ""
-	  let s:commandMode = s:CM_RUN
-	  if curArg =~ '^++.$'
-	    if curArg == '++p'
-	      let s:commandMode = s:CM_PIPE
-	    elseif curArg == '++f'
-	      let s:commandMode = s:CM_FILTER
-	    elseif curArg == '++d'
-	      let s:commandMode = s:CM_DISPLAY
-	    elseif curArg == '++r'
-	      let s:commandMode = s:CM_RUN
-	    endif
-	    continue
-	  endif
-	  let s:p4Options = s:p4Options . ' ' . curArg
-	else
-	  let s:p4CmdOptions = s:p4CmdOptions . ' ' . curArg
-	endif
+      if s:p4Arguments =~# s:EMPTY_STR
+        if s:p4Command =~# s:EMPTY_STR
+          if curArg =~# '^++[pfdr]$'
+            if curArg ==# '++p'
+              let s:commandMode = s:CM_PIPE
+            elseif curArg ==# '++f'
+              let s:commandMode = s:CM_FILTER
+            elseif curArg ==# '++d'
+              let s:commandMode = s:CM_DISPLAY
+            elseif curArg ==# '++r'
+              let s:commandMode = s:CM_RUN
+            endif
+            continue
+          endif
+          let s:p4Options = s:p4Options . ' ' . curArg
+        else
+          let s:p4CmdOptions = s:p4CmdOptions . ' ' . curArg
+        endif
       else
-	let s:p4Arguments = s:p4Arguments . ' ' .  curArg
+        let s:p4Arguments = s:p4Arguments . ' ' .  curArg
       endif
     endif
-   " This option requires it to act like a filter.
-    if s:p4Command == '' && curArg == '-x'
+   " The "-x -" option requires it to act like a filter.
+    if s:p4Command =~# s:EMPTY_STR && prevArg ==# '-x' && curArg ==# '-'
       let s:commandMode = s:CM_FILTER
     endif
 
     finally " [+2s]
-      if s:pendingPipeArg == ''
-	let i = i + 1
+      if s:pendingPipeArg =~# s:EMPTY_STR
+        let i = i + 1
       endif
       let prevArg = curArg
     endtry
   endwhile
+
+  if !MvContainsElement(s:p4Options, s:SPACE_AS_SEP, '-d', ' ')
+    let curDir = s:EvalExpr(s:curDirExpr, '')
+    if curDir !=# ''
+      let s:p4Options = s:p4Options . ' -d ' . s:EscapeFileName(curDir)
+    endif
+  endif
+
   let s:p4Options = s:CleanSpaces(s:p4Options)
   let s:p4Command = s:CleanSpaces(s:p4Command)
   let s:p4CmdOptions = s:CleanSpaces(s:p4CmdOptions)
@@ -3231,31 +3282,32 @@ function! s:ParseOptions(fline, lline, ...) " range
 endfunction
 
 function! s:IsAnOption(arg)
-  if a:arg =~ '^-.$' || a:arg =~ '^-d[cdnsu]$' || a:arg =~ '^-a[fmsty]$' ||
-	\ a:arg =~ '^-s[ader]$' || a:arg =~ '^-qu$' || a:arg =~ '^+.$'
-	\ || a:arg =~ '^++.$'
+  if a:arg =~# '^-.$' || a:arg =~# '^-d\%([cnsubw]\|\d\+\)*$' || a:arg =~# '^-a[fmsty]$'
+        \ || a:arg =~# '^-s[ader]$' || a:arg =~# '^-qu$' || a:arg =~# '^+'
     return 1
   else
     return 0
   endif
 endfunction
 
-function! s:Escape(str)
-  return Escape(a:str, ' ')
-endfunction
-
 function! s:CleanSpaces(str)
-  " Though not complete, it is just easier to say,
+  " Though not complete, it is enough to just say,
   "   "spaces that are not preceded by \'s".
-  return substitute(substitute(a:str, '^ \+\|\%(\\\@<! \)\+$', '', ''),
-	\ '\%(\\\@<! \)\+', ' ', 'g')
+  return substitute(substitute(a:str, '^ \+\|\%(\\\@<! \)\+$', '', 'g'),
+        \ '\%(\\\@<! \)\+', ' ', 'g')
 endfunction
 """ END: Argument parsing }}}
 
 """ BEGIN: Messages and dialogs {{{
+function! s:SyntaxError(msg)
+  let s:errCode = 1
+  call s:ConfirmMessage("Syntax Error:\n".a:msg, "OK", 1, "Error")
+  return s:errCode
+endfunction
+
 function! s:ShowVimError(errmsg)
   call s:ConfirmMessage("There was an error executing a Vim command.\n\t" .
-	\ a:errmsg, "OK", 1, "Error")
+        \ a:errmsg, "OK", 1, "Error")
   let s:errCode = 1
 endfunction
 
@@ -3268,7 +3320,7 @@ endfunction
 function! s:ConfirmMessage(msg, opts, def, type)
   let s:lastMsg = a:msg
   let s:lastMsgGrp = 'None'
-  if a:type == 'Error'
+  if a:type ==# 'Error'
     let s:lastMsgGrp = 'Error'
   endif
   return confirm(a:msg, a:opts, a:def, a:type)
@@ -3276,7 +3328,7 @@ endfunction
 
 function! s:PromptFor(loop, useDialogs, msg, default)
   let result = ""
-  while result == ""
+  while result =~# s:EMPTY_STR
     if a:useDialogs
       let result = inputdialog(a:msg, a:default)
     else
@@ -3298,12 +3350,27 @@ endfunction
 " Escape all the special characters (as the user would if he typed the name
 "   himself).
 function! s:EscapeFileName(fName)
-  return Escape(a:fName, ' &|')
+  " If there is a -d option existing, then it is better to use the full path
+  "   name.
+  if MvContainsElement(s:p4Options, s:SPACE_AS_SEP, '-d', ' ')
+    let fName = fnamemodify(a:fName, ':p')
+  else
+    let fName = a:fName
+  endif
+  return Escape(fName, ' &|')
+endfunction
+
+function! s:GetCurFileName()
+  " When the current window itself is a perforce window, then carry over the
+  " existing value.
+  return (exists('b:p4OrgFileName') &&
+        \              b:p4OrgFileName !~# s:EMPTY_STR) ?
+        \             b:p4OrgFileName : expand('%:p')
 endfunction
 
 function! s:GuessFileTypeForCurrentWindow()
-  let fileExt = s:GuessFileType(b:p4CurFileName)
-  if fileExt == ""
+  let fileExt = s:GuessFileType(b:p4OrgFileName)
+  if fileExt =~# s:EMPTY_STR
     let fileExt = s:GuessFileType(expand("%"))
   endif
   return fileExt
@@ -3314,36 +3381,179 @@ function! s:GuessFileType(name)
   return matchstr(fileExt, '\w\+')
 endfunction
 
-function! s:IsDepotPath(depotPath)
-  if match(a:depotPath, '^//' . s:p4Depot . '/') == 0 ||
-        \ match(a:depotPath, '^//'. s:p4Client . '/') == 0
+function! s:IsDepotPath(path)
+  if match(a:path, '^//' . s:p4Depot . '/') == 0
+        " \ || match(a:path, '^//'. s:p4Client . '/') == 0
     return 1
   else
     return 0
   endif
 endfunction
 
-function! s:ConvertToLocalPath(depotPath)
-  let fileName = a:depotPath
-  if s:IsDepotPath(a:depotPath)
-    let fileName = s:clientRoot . substitute(fileName, '^//[^/]\+', '', '')
+function! s:PathRefersToDepot(path)
+  if s:IsDepotPath(a:path) || s:GetRevisionSpecifier(a:path) !~# s:EMPTY_STR
+    return 1
+  else
+    return 0
   endif
-  let fileName = substitute(fileName, '#[^#]\+$', '', '')
-  return fileName
 endfunction
 
-" I should really use 'where' command here.
-function! s:ConvertToDepotPath(localPath)
-  let fileName = a:localPath
-  if ! s:IsDepotPath(a:localPath)
-    let fileName = CleanupFileName(a:localPath)
-    if s:IsFileUnderDepot(fileName)
-      let fileName = substitute(fileName, '^' . s:clientRoot, '//' . s:p4Depot,
-	    \ '')
+function! s:GetRevisionSpecifier(fileName)
+  return matchstr(a:fileName,
+        \ '^\(\%(\S\|\\\@<!\%(\\\\\)*\\ \)\+\)[\\]*\zs[#@].*$')
+endfunction
+
+" Removes the //<depot> or //<client> prefix from fileName.
+function! s:StripRemotePath(fileName)
+  "return substitute(a:fileName, '//\%('.s:p4Depot.'\|'.s:p4Client.'\)', '', '')
+  return substitute(a:fileName, '//\%('.s:p4Depot.'\)', '', '')
+endfunction
+
+" Client view translation {{{
+" Convert perforce file wildcards ("*", "..." and "%[1-9]") to a Vim string
+"   regex (see |pattern.txt|). Returns patterns that work when "very nomagic"
+"   is set.
+function! s:TranlsateP4Wild(p4Wild, rhsView)
+  let strRegex = ''
+  if a:rhsView
+    if a:p4Wild[0] ==# '%'
+      let pos = s:p4WildMap{a:p4Wild[1]}
+    else
+      let pos = s:p4WildCount
+    endif
+    let strRegex = '\'.pos
+  else
+    if a:p4Wild ==# '*'
+      let strRegex = '\(\[^/]\*\)'
+    elseif a:p4Wild ==# '...'
+      let strRegex = '\(\.\*\)'
+    elseif a:p4Wild[0] ==# '%'
+      let strRegex = '\(\[^/]\*\)'
+      let s:p4WildMap{a:p4Wild[1]} = s:p4WildCount
+    endif
+  endif
+  let s:p4WildCount = s:p4WildCount + 1
+  return strRegex
+endfunction
+
+" Convert perforce file regex (containing "*", "..." and "%[1-9]") to a Vim
+"   string regex. No error checks for now, for simplicity.
+function! s:TranslateP4FileRegex(p4Regex, rhsView)
+  let s:p4WildCount = 1
+  " Note: We don't expect backslashes in the views, so no special handling.
+  return substitute(a:p4Regex,
+        \ '\(\*\|\%(\.\)\@<!\.\.\.\%(\.\)\@!\|%\([1-9]\)\)',
+        \ '\=s:TranlsateP4Wild(submatch(1), a:rhsView)', 'g')
+endfunction
+
+function! s:CondUpdateViewMappings()
+  if s:useClientViewMap && (s:toDepotMapping =~# s:EMPTY_STR ||
+        \ s:fromDepotMapping =~# s:EMPTY_STR || !exists('s:viewMapLastClient')
+        \ || s:viewMapLastClient !=# s:p4Client)
+    call s:UpdateViewMappings()
+  endif
+endfunction
+
+function! s:UpdateViewMappings()
+  if s:p4Client =~# s:EMPTY_STR
+    return
+  endif
+  let view = ''
+  call s:PushP4Context()
+  try
+    let view = substitute(s:PFIF(1, 4, '-c', s:p4Client, 'client'),
+          \ "\\_.*\nView:\\ze\n", '', 'g')
+    if s:errCode != 0
+      return
+    endif
+  finally
+    call s:PopP4Context(0)
+  endtry
+  let s:fromDepotMapping = ''
+  let s:toDepotMapping = ''
+  call MvIterCreate(view, "\n", 'P4View')
+  while MvIterHasNext('P4View')
+    let nextMap = MvIterNext('P4View')
+    " We need to inverse the order of mapping such that the mappings that come
+    "   later in the view take more priority.
+    " Also, don't care about exclusionary mappings for simplicity (this could
+    "   be considered a feature too).
+    exec substitute(nextMap,
+          \ '\s*-\?\(//'.s:p4Depot.'/[^ ]\+\)\s*\(//'.s:p4Client.'/.\+\)',
+          \ 'let s:fromDepotMapping = s:TranslateP4FileRegex('."'".'\1'.
+          \ "'".', 0)." ".s:TranslateP4FileRegex('."'".'\2'."'".
+          \ ', 1)."\n".s:fromDepotMapping', '')
+    exec substitute(nextMap,
+          \ '\s*-\?\(//'.s:p4Depot.'/[^ ]\+\)\s*\(//'.s:p4Client.'/.\+\)',
+          \ 'let s:toDepotMapping = s:TranslateP4FileRegex('."'".'\2'.
+          \ "'".', 0)." ".s:TranslateP4FileRegex('."'".'\1'."'".
+          \ ', 1)."\n".s:toDepotMapping', '')
+    let s:viewMapLastClient = s:p4Client
+  endwhile
+  call MvIterDestroy('P4View')
+  " FIXME: '^\_s*$' should have worked.
+  if s:fromDepotMapping =~# '^\%(\s\|\n\)*$' ||
+        \ s:fromDepotMapping =~# '^\%(\s\|\n\)*$'
+    let s:fromDepotMapping = ''
+    let s:toDepotMapping = ''
+  endif
+endfunction
+
+function! s:ConvertToLocalPath(path)
+  let fileName = substitute(a:path, '#[^#]\+$', '', '')
+  if s:IsDepotPath(fileName)
+    if s:useClientViewMap
+      call s:CondUpdateViewMappings()
+      call MvIterCreate(s:fromDepotMapping, "\n", 'ConvertToLocalPath')
+      while MvIterHasNext('ConvertToLocalPath')
+        let nextMap = MvIterNext('ConvertToLocalPath')
+        exec substitute(nextMap, '\(//'.s:p4Depot.'/.*[^ ]\)\s*//'.s:p4Client.
+              \ '/\(.*\)', "let lhs = '\\1'\nlet rhs = '".s:clientRoot."/\\2'", '')
+        if fileName =~# '\V'.lhs
+          let fileName = substitute(fileName, '\V'.lhs, rhs, '')
+          break
+        endif
+      endwhile
+      call MvIterDestroy('ConvertToLocalPath')
+    endif
+    if s:IsDepotPath(fileName)
+      let fileName = s:clientRoot . s:StripRemotePath(fileName)
     endif
   endif
   return fileName
 endfunction
+
+function! s:ConvertToDepotPath(path)
+  " If already a depot path, just return it without any changes.
+  if s:IsDepotPath(a:path)
+    let fileName = a:path
+  else
+    let fileName = CleanupFileName(a:path)
+    if s:IsFileUnderDepot(fileName)
+      if s:useClientViewMap
+        call s:CondUpdateViewMappings()
+        call MvIterCreate(s:toDepotMapping, "\n", 'ConvertToDepotPath')
+        while MvIterHasNext('ConvertToDepotPath')
+          let nextMap = MvIterNext('ConvertToDepotPath')
+          exec substitute(nextMap,
+                \ '//'.s:p4Client.'/\(.*[^ ]\)\s*\(//'.s:p4Depot.'/.*\)',
+                \ "let rhs = '\\2'\nlet lhs = '".s:clientRoot."/\\1'", '')
+          if fileName =~# '\V'.lhs
+            let fileName = substitute(fileName, '\V'.lhs, rhs, '')
+            break
+          endif
+        endwhile
+        call MvIterDestroy('ConvertToDepotPath')
+      endif
+      if ! s:IsDepotPath(fileName)
+        let fileName = substitute(fileName, '^'.s:clientRoot, '//'.s:p4Depot,
+              \ '')
+      endif
+    endif
+  endif
+  return fileName
+endfunction
+" Client view translation }}}
 
 " Requires at least 2 arguments.
 " Returns a list of alternative filenames.
@@ -3356,23 +3566,21 @@ function! s:PFGetAltFiles(codeline, ...)
 
   let i = 1
   let altFiles = ""
-  let root=CleanupFileName(s:clientRoot) . "/"
   while i <= a:0
     let fileName = a:{i}
     let fileName=CleanupFileName(fileName)
-    " We have only one slash after the cleanup is done.
-    if match(fileName, '^/' . s:p4Depot . '/') == 0 ||
-          \ match(fileName, '^/'. s:p4Client . '/') == 0
-      let fileName = root . substitute(fileName, '^/[^/]\+/', '', '')
+    if ! s:IsDepotPath(fileName)
+      let fileName = s:ConvertToDepotPath(fileName)
     endif
-    " One final cleanup, just in case.
-    let fileName=CleanupFileName(fileName)
 
-    if altCodeLine == s:p4Depot
-      let altFile = substitute(fileName, root, '//' . s:p4Depot . '/', "")
+    if altCodeLine ==# s:p4Depot
+      " We do nothing, it is already converted to depot path.
+      let altFile = fileName
     else
-      let altFile = substitute(fileName, root . '[^/]\+', root . altCodeLine,
-	    \ "")
+      " FIXME: Assumes that the current branch name has single path component.
+      let altFile = substitute(fileName, '//'.s:p4Depot.'/[^/]\+',
+            \ '//'.s:p4Depot.'/' . altCodeLine, "")
+      let altFile = s:ConvertToLocalPath(altFile)
     endif
     let altFiles = MvAddElement(altFiles, ' ', escape(altFile, ' '))
     let i = i + 1
@@ -3385,10 +3593,10 @@ endfunction
 
 function! s:IsFileUnderDepot(fileName)
   let fileName = CleanupFileName(a:fileName)
-  if stridx(fileName, s:clientRoot) != 0
-    return 0
-  else
+  if fileName =~? '^\V'.s:clientRoot
     return 1
+  else
+    return 0
   endif
 endfunction
 
@@ -3400,8 +3608,8 @@ function! s:GetCurrentDepotFile(lineNo)
   " Local submissions.
   let fileName = ""
   let line = getline(a:lineNo)
-  if match(line, '//' . s:p4Depot . '/.*\(#\d\+\)\?') != -1 ||
-        \ match(line, '^//'. s:p4Client . '/.*\(#\d\+\)\?') != -1
+  if match(line, '//' . s:p4Depot . '/.*\(#\d\+\)\?') != -1
+        " \ || match(line, '^//'. s:p4Client . '/.*\(#\d\+\)\?') != -1
     let fileName = matchstr(line, '//[^/]\+/[^#]*\(#\d\+\)\?')
   elseif match(line, '\.\.\. #\d\+ .*') != -1
     " Branches, integrations etc.
@@ -3412,7 +3620,7 @@ function! s:GetCurrentDepotFile(lineNo)
       let fileName = ""
     else
       let fileName = substitute(s:GetCurrentDepotFile(line(".")), '#\d\+$', '',
-	    \ '')
+            \ '')
       let fileName = fileName . "#" . fileVer
     endif
     call RestoreHardPosition('Perforce')
@@ -3424,12 +3632,12 @@ endfunction
 
 """ BEGIN: Buffer management, etc. {{{
 " Must be followed by a call to s:EndBufSetup()
-function! s:StartBufSetup(outputType)
-  " If this outputType creates a new window, then only do setup.
+function! s:StartBufSetup()
+  " If the command created a new window, then only do setup.
   if !s:errCode
-    if s:newWindowCreated
-      if a:outputType == 1 || a:outputType == 21
-	wincmd p
+    if s:NewWindowCreated()
+      if s:outputType == 1
+        wincmd p
       endif
 
       return 1
@@ -3438,9 +3646,9 @@ function! s:StartBufSetup(outputType)
   return 0
 endfunction
 
-function! s:EndBufSetup(outputType)
-  if s:newWindowCreated
-    if a:outputType == 1 || a:outputType == 21
+function! s:EndBufSetup()
+  if s:NewWindowCreated()
+    if s:outputType == 1
       wincmd p
     endif
   endif
@@ -3451,115 +3659,153 @@ endfunction
 "   0 - clear with no undo.
 "   1 - clear with undo.
 "   2 - don't clear
-function! s:GotoWindow(outputType, clearBuffer, p4CurFileName)
+function! s:GotoWindow(clearBuffer, p4OrgFileName, cmdCompleted)
+  let bufNr = FindBufferForName(s:p4WinName)
+  " FIXME: Precautionary measure to avoid accidentally matching an existing
+  "   buffer and thus overwriting the contents.
+  if bufNr != -1 && getbufvar(bufNr, '&buftype') == ''
+    return s:BufConflictError(a:cmdCompleted)
+  endif
+
   " If there is a window for this buffer already, then we will just move
   "   cursor into it.
-  let curBufnr = winbufnr(winnr())
-  let winnr = bufwinnr(FindBufferForName(s:p4WinName))
+  let curBufnr = bufnr('%')
+  let maxBufNr = bufnr('$')
+  let bufWinnr = bufwinnr(bufNr)
   let nWindows = NumberOfWindows()
-  let s:newWindowCreated = 1
   let _eventignore = &eventignore
   try
-    set eventignore=BufRead,BufReadPre,BufEnter,BufNewFile
-    if a:outputType == 1 " Preview
+    "set eventignore=BufRead,BufReadPre,BufEnter,BufNewFile
+    set eventignore=all
+    if s:outputType == 1 " Preview
       let alreadyOpen = 0
       try
-	wincmd P
-	" No exception, preview window is already open.
-	" Only when the buffer is not already visible in the preview window.
-	if winnr() != winnr
-	  " If the current buffer in preview window is a perforce buffer, when
-	  "   we switch to a different buffer, unless 'hidden' or
-	  "   'bufhidden=hide' setting is set, we have to first do a :pclose.
-	  if exists("b:p4CurFileName")
-	    if ! &hidden && &l:bufhidden != 'hide' && ! s:p4HideOnBufHidden
-	      pclose
-	      let nWindows = nWindows - 1
-	    elseif s:p4HideOnBufHidden
-	      setlocal bufhidden=hide
-	    endif
-	  endif
-	else
-	  let alreadyOpen = 1
-	endif
+        wincmd P
+        " No exception, meaning preview window is already open.
+        if winnr() == bufWinnr
+          " The buffer is already visible in the preview window. We don't have
+          " to do anything in this case.
+          let alreadyOpen = 1
+        endif
       catch /^Vim\%((\a\+)\)\=:E441/
-	" Ignore.
+        " Ignore.
       endtry
       if !alreadyOpen
-	call s:EditP4WinName('pedit', nWindows)
-	wincmd P
+        call s:EditP4WinName(1, nWindows)
+        wincmd P
       endif
-      normal! mt
-    elseif winnr != -1
-      call MoveCursorToWindow(winnr)
-      " For navigation.
-      normal! mt
+    elseif bufWinnr != -1
+      call MoveCursorToWindow(bufWinnr)
     else
       exec s:splitCommand
-      call s:EditP4WinName('edit', nWindows)
+      call s:EditP4WinName(0, nWindows)
     endif
+    if s:errCode == 0
+      " FIXME: If the name didn't originally match with a buffer, we expect
+      "   the s:EditP4WinName() to create a new buffer, but there is a bug in
+      "   Vim, that treats "..." in filenames as ".." resulting in multiple
+      "   names matching the same buffer ( "p4 diff ../.../*.java" and
+      "   "p4 submit ../.../*.java" e.g.). Though I worked around this
+      "   particular bug by avoiding "..." in filenames, this is a good check
+      "   in any case.
+      if bufNr == -1 && bufnr('%') <= maxBufNr
+        return s:BufConflictError(a:cmdCompleted)
+      endif
+      " For navigation.
+      normal! mt
+    endif
+  catch
+    call s:ShowVimError("Exception while opening new window.\n" . v:exception)
   finally
     let &eventignore = _eventignore
   endtry
-  if s:newWindowCreated
-    " We now have a new window created, but may be with errors.
-    if s:errCode == 0
-      setlocal noreadonly
-      setlocal modifiable
-      if s:commandMode == s:CM_RUN
-	if a:clearBuffer == 1
-	  call OptClearBuffer()
-	elseif a:clearBuffer == 0
-	  silent! 0,$delete _
-	endif
+  " We now have a new window created, but may be with errors.
+  if s:errCode == 0
+    setlocal noreadonly
+    setlocal modifiable
+    if s:commandMode ==# s:CM_RUN
+      if a:clearBuffer == 1
+        call OptClearBuffer()
+      elseif a:clearBuffer == 0
+        silent! 0,$delete _
       endif
+    endif
 
-      let b:p4CurFileName = a:p4CurFileName
-      " Even if we found an existing window for it, we still want to set
-      "   certain variables.
-      let s:newWindowCreated = 1
-    else
-      if winbufnr(winnr()) == curBufnr
-	quit
-      else
-	" This should even close the window.
-	silent! exec "bwipeout " . bufnr('%')
+    let b:p4OrgFileName = a:p4OrgFileName
+    call s:PFSetupBuf(expand('%'))
+  else
+    " Window is created but with an error. We might actually miss the cases
+    "   where a preview operation when the preview window is already open
+    "   fails, and so no additional windows are created, but detecting such
+    "   cases could be error prone, so it is better to leave the buffer in
+    "   this case, rather than making a mistake.
+    if NumberOfWindows() > nWindows
+      if winbufnr(winnr()) == curBufnr " Error creating buffer itself.
+        quit
+      elseif bufname('%') == s:p4WinName
+        " This should even close the window.
+        silent! exec "bwipeout " . bufnr('%')
       endif
-      let s:newWindowCreated = 0
     endif
   endif
+  return 0
 endfunction
 
-function! s:EditP4WinName(editCmd, nWindows)
+function! s:BufConflictError(cmdCompleted)
+  return s:ShowVimError('This perforce command resulted in matching an '.
+        \ 'existing buffer. To prevent any demage this could cause '.
+        \ 'the command will be aborted at this point.'.
+        \ (a:cmdCompleted ? ("\nHowever the command completed ".
+        \ (s:errCode ? 'un' : ''). 'successfully.') : ''))
+endfunction
+
+function! s:EditP4WinName(preview, nWindows)
   let fatal = 0
   let bug = 0
   let exception = ''
+  let pWindowWasOpen = (GetPreviewWinnr() != -1)
+  " Some patterns can cause problems.
+  let _wildignore = &wildignore
   try
-    exec a:editCmd s:p4WinName
+    set wildignore=
+    exec (a:preview?'p':'').'edit' s:p4WinName
   catch /^Vim\%((\a\+)\)\=:E303/
     " This is a non-fatal error.
     let bug = 1 | let exception = v:exception
   catch /^Vim\%((\a\+)\)\=:\%(E77\|E480\)/
-    let bug = 1 | let exception = v:exception
-    let fatal = 1
+    let bug = 1 | let exception = v:exception | let fatal = 1
   catch
-    let fatal = 1 | let exception = v:exception
+    let exception = v:exception | let fatal = 1
+  finally
+    let &wildignore = _wildignore
   endtry
   if fatal
     call s:ShowVimError(exception)
   endif
   if bug
-    echohl ERROR | echomsg "Please report this error message:\n".v:exception.
-	  \ "\nwith the following information:\ns:p4WinName=".s:p4WinName |
-	  \ echohl NONE
+    let stack = '' | try | throw '' | catch | let stack = v:throwpoint | endtry
+    echohl ERROR
+    echomsg "Please report this error message:"
+    echomsg "\t".exception
+    echomsg
+    echomsg "with the following information:"
+    echomsg "\ts:p4WinName=".s:p4WinName
+    echomsg "\tcurrent stack=".stack
+    echohl NONE
   endif
-  if a:editCmd !~ '\<pedit\>' && a:nWindows == NumberOfWindows()
-    let s:newWindowCreated = 0
+  " For non preview operation, or for preview window operation when the preview
+  "   window is not already visible, we expect the number of windows to go up.
+  if !a:preview || (a:preview && !pWindowWasOpen)
+    if a:nWindows >= NumberOfWindows()
+      let s:errCode = 1
+    endif
   endif
 endfunction
 
 function! s:MakeWindowName()
-  let cmdStr = s:MakeP4CmdString('p4')
+  " Let only the options that are explicitly specified appear in the window
+  "   name.
+  let cmdStr = 'p4 '.s:MakeP4CmdString(s:p4Options)
   let winName = cmdStr
   "let winName = DeEscape(winName)
   " HACK: Work-around for some weird handling of buffer names that have "..."
@@ -3568,9 +3814,15 @@ function! s:MakeWindowName()
   "   the buffer. If we append another character to this, I observed that the
   "   autocommand gets triggered. Using "/" instead of "'" would probably be
   "   more appropriate, but this is causing unexpected FileChangedShell
-  "   autocommands on certain filenames (try "PF submit ../..." e.g.).
+  "   autocommands on certain filenames (try "PF submit ../..." e.g.). There
+  "   is also another issue with "..." (anywhere) getting treated as ".."
+  "   resulting in two names matching the same buffer(
+  "     "p4 diff ../.../*.java" and "p4 submit ../.../*.java" e.g.). This
+  "   could also change the name of the buffer during the :cd operations
+  "   (though applies only to spec buffers).
   "let winName = substitute(winName, '\.\.\%( \|$\)\@=', '&/', 'g')
-  let winName = substitute(winName, '\.\.\%( \|$\)\@=', "&'", 'g')
+  "let winName = substitute(winName, '\.\.\%( \|$\)\@=', "&'", 'g')
+  let winName = substitute(winName, '\.\.\.', '..,', 'g')
   " The intention is to do the substitute only on systems like windoze that
   "   don't allow all characters in the filename, but I can't generalize it
   "   enough, so as a workaround I a just assuming any system supporting
@@ -3582,12 +3834,12 @@ function! s:MakeWindowName()
     " Some characters are not allowed in a filename on windows so substitute
     " them with something else.
     let winName = substitute(winName, s:specialChars,
-	  \ '\="[" . s:specialChars{submatch(1)} . "]"', 'g')
+          \ '\="[" . s:specialChars{submatch(1)} . "]"', 'g')
     "let winName = substitute(winName, s:specialChars, '\\\1', 'g')
   endif
   " Finally escape some characters again.
   let winName = Escape(winName, " #%\t")
-  if s:GetShellEnvType() == s:ST_UNIX
+  if ! exists('+shellslash') " Assuming UNIX environment.
     let winName = substitute(winName, '\\\@<!\(\%(\\\\\)*\\[^ ]\)', '\\\1', 'g')
     let winName = escape(winName, "'~$`{\"")
   endif
@@ -3596,56 +3848,40 @@ endfunction
 
 function! s:PFSetupBuf(bufName)
   call SetupScratchBuffer()
-  " Remove any ^M's at the end (for windows), without corrupting the search
-  " register or its history.
-  call s:SilentSub("\<CR>$", '%s///e')
-  setlocal nomodified
-  setlocal nomodifiable
-  setlocal foldcolumn=0
-  if s:p4HideOnBufHidden
-    setlocal bufhidden=hide
-  else
-    setlocal bufhidden=
-    call s:PFSetupBufAutoCommand(a:bufName, 'BufUnload',
-	\ ':call <SID>PFExecBufClean(expand("<abuf>") + 0)')
-  endif
+  let &l:bufhidden=s:p4BufHidden
 endfunction
 
 function! s:PFSetupForSpec()
   setlocal modifiable
-  set buftype=
-  call s:PFSetupBufAutoCommand(expand('%'), 'BufWriteCmd', ':W')
+  setlocal buftype=
+  call s:PFSetupBufAutoCommand(expand('%'), 'BufWriteCmd', ':W', 1)
+  call s:PFSetupBufAutoCommand(expand('%'), 'BufWipeout',
+      \ ':call <SID>PFUnSetupBufAutoCommand(bufname(expand("<abuf>") + 0), '.
+      \ '"*")', 0)
 endfunction
 
 function! s:WipeoutP4Buffers(...)
   let testMode = 1
-  if a:0 > 0 && a:1 == '+y'
+  if a:0 > 0 && a:1 ==# '++y'
     let testMode = 0
   endif
   let i = 1
   let lastBuf = bufnr('$')
   let cleanedBufs = ''
   while i <= lastBuf
-    if bufexists(i) && expand('#'.i) =~ '\<p4 ' && bufwinnr(i) == -1
+    if bufexists(i) && expand('#'.i) =~# '\<p4 ' && bufwinnr(i) == -1
       if testMode
-	let cleanedBufs = cleanedBufs . ', ' . expand('#'.i)
+        let cleanedBufs = cleanedBufs . ', ' . expand('#'.i)
       else
-	let _report = &report
-	try
-	  set report=99999
-	  exec 'bwipeout' i
-	  call s:PFUnSetupBufAutoCommand(expand('#'.i), 'BufUnload')
-	finally
-	  let &report = _report
-	endtry
-	let cleanedBufs = cleanedBufs + 1
+        silent! exec 'bwipeout' i
+        let cleanedBufs = cleanedBufs + 1
       endif
     endif
     let i = i + 1
   endwhile
   if testMode
-    echo "Buffers that will be wipedout (Use +y to perform action):" .
-	  \ cleanedBufs
+    echo "Buffers that will be wipedout (Use ++y to perform action):" .
+          \ cleanedBufs
   else
     echo "Total Perforce buffers wipedout (start with 'p4 '): " . cleanedBufs
   endif
@@ -3653,71 +3889,58 @@ endfunction
 
 " Arrange an autocommand such that the buffer is automatically deleted when the
 "  window is quit. Delete the autocommand itself when done.
-function! s:PFSetupBufAutoCommand(bufName, auName, auCmd)
-  let bufName = s:GetBufNameForAu(a:bufName)
+function! s:PFSetupBufAutoCommand(bufName, auName, auCmd, nested)
+  let bufName = GetBufNameForAu(a:bufName)
   " Just in case the autocommands are leaking, this will curtail the leak a
   "   little bit.
   silent! exec 'au! Perforce' a:auName bufName
-  exec 'au Perforce' a:auName bufName a:auCmd
+  exec 'au Perforce' a:auName bufName.(a:nested?' nested ':' ').a:auCmd
 endfunction
 
 function! s:PFUnSetupBufAutoCommand(bufName, auName)
-  let bufName = s:GetBufNameForAu(a:bufName)
+  let bufName = GetBufNameForAu(a:bufName)
   silent! exec "au! Perforce" a:auName bufName
 endfunction
 
-function! s:GetBufNameForAu(bufName)
-  let bufName = a:bufName
-  " Autocommands always require forward-slashes.
-  let bufName = substitute(bufName, "\\\\", '/', 'g')
-  let bufName = escape(bufName, '*?,{}[ ')
-  return bufName
-endfunction
-
-" Find and delete the buffer. Delete the autocommand itself after that.
-function! s:PFExecBufClean(bufNo)
-  if a:bufNo == -1 | return | endif
-  " We get here, only when the buffer is getting unloaded, because the user
-  "   didn't use one of the 'hidden' or 'bufhidden' settings or :hide command.
-  "   It is safe to assume that this buffer can just be wipedout at this
-  "   stage.
-  exec "au! Perforce * " . s:GetBufNameForAu(bufname(a:bufNo))
-  silent! exec "bwipeout! ". a:bufNo
-endfunction
-
-function! s:PRefreshActivePane()
+function! s:PFRefreshActivePane()
   if exists("b:p4FullCmd")
-    call SaveHardPosition('Perforce')
+    call SaveSoftPosition('Perforce')
 
     let _modifiable = &l:modifiable
     try
       setlocal modifiable
       exec "1,$!" . b:p4FullCmd
     catch
-      call s:ShowVimError(b:exception)
+      call s:ShowVimError(v:exception)
     finally
       let &l:modifiable=_modifiable
     endtry
 
-    call RestoreHardPosition('Perforce')
-    call ResetHardPosition('Perforce')
+    call RestoreSoftPosition('Perforce')
+    call ResetSoftPosition('Perforce')
   endif
 endfunction
 """ END: Buffer management, etc. }}}
 
 """ BEGIN: Testing {{{
 " Ex: PFTestCmdParse -c client -u user integrate -b branch -s source target1 target2
-command! -nargs=* -range=% PFTestCmdParse call <SID>TestParseOptions(<f-args>)
+command! -nargs=* -range=% -complete=file PFTestCmdParse call <SID>TestParseOptions(<f-args>)
 function! s:TestParseOptions(commandName, ...) range
   exec MakeArgumentString()
   exec "call s:ParseOptionsIF(a:firstline, a:lastline," .
-	\ " 0, a:commandName, " . argumentString . ")"
+        \ " 0, 0,  a:commandName, " . argumentString . ")"
+  call s:DebugP4Status()
+endfunction
+
+function! s:DebugP4Status()
   echo "p4Options :" . s:p4Options . ":"
   echo "p4Command :" . s:p4Command . ":"
   echo "p4CmdOptions :" . s:p4CmdOptions . ":"
   echo "p4Arguments :" . s:p4Arguments . ":"
   echo "p4Pipe :" . s:p4Pipe . ":"
   echo "p4WinName :" . s:p4WinName . ":"
+  echo "outputType :" . s:outputType . ":"
+  echo "errCode :" . s:errCode . ":"
   echo "commandMode :" . s:commandMode . ":"
   echo "filterRange :" . s:filterRange . ":"
   echo "Cmd :" . s:CreateFullCmd(s:MakeP4CmdString('')) . ":"
@@ -3738,7 +3961,7 @@ endfunction
 "  let s:p4WinName = "winname2"
 "  call s:PushP4Context()
 "
-"  call s:ResetP4Vars()
+"  call s:ResetP4ContextVars()
 "  echo "After reset: " . s:CreateFullCmd(s:MakeP4CmdString(''))
 "  call s:PopP4Context()
 "  echo "After pop1: " . s:CreateFullCmd(s:MakeP4CmdString(''))
@@ -3748,10 +3971,36 @@ endfunction
 
 """ END: Testing }}}
 
+""" BEGIN: Experimental API {{{
+
+function! PFGet(var)
+  return {a:var}
+endfunction
+
+function! PFSet(var, val)
+  let {a:var} = a:val
+endfunction
+
+function! PFCall(func, ...)
+  exec MakeArgumentString()
+  exec "let result = {a:func}(".argumentString.")"
+  return result
+endfunction
+
+function! PFEval(expr)
+  exec "let result = ".a:expr
+  return result
+endfunction
+
+""" END: Experimental API }}}
+
 """ END: Infrastructure }}}
+ 
+" Do the actual initialization.
+call s:Initialize()
 
 " Restore cpo.
 let &cpo = s:save_cpo
 unlet s:save_cpo
 
-" vim6:fdm=marker
+" vim6:fdm=marker et sw=2

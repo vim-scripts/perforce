@@ -4,7 +4,7 @@
 " Last Change:	  16-May-2003 @ 10:16
 " Since Version:  1.4
 " Revision:	  1.0.5
-" Plugin Version: 1.4
+" Plugin Version: 2.1
 " Download From:
 "     http://vim.sourceforge.net/scripts/script.php?script_id=240
 " TODO:

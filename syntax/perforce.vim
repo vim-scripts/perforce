@@ -1,42 +1,10 @@
 " Vim syntax file
 " Language:	  Perforce SCM Spec
-" Author:	  Hari Krishna <hari_vim at yahoo dot com>
-" Last Modified:  15-Jan-2003 @ 12:54
-" Plugin Version: 1.4
-" Revision:	  1.0.3
+" Author:	  Hari Krishna Dara (hari_vim at yahoo dot com)
+" Last Modified:  31-Mar-2004 @ 23:32
+" Plugin Version: 2.1
+" Revision:	  1.0.4
 " Since Version:  1.4
-"
-" Usage:
-"   Place this file in syntax director under one of the vim runtime
-"     directories. This is automatically be used by the perforce plugin for
-"     all the perforce windows. If you want to specifically enable perforce
-"     syntax highlighting for any vim buffers, just run the command:
-"
-"	set ft=perforce
-"
-"     at command prompt.
-"   You can also change the syntax coloring by inserting the following lines
-"   in your .vimrc:
-"
-"	hi link perforceSpecKey           <your_preferred_highlighting_group>
-"	hi link perforceComment           <your_preferred_highlighting_group>
-"	hi link perforceDate              <your_preferred_highlighting_group>
-"	hi link perforceCommands          <your_preferred_highlighting_group>
-"	hi link perforceHelpKeys          <your_preferred_highlighting_group>
-"	hi link perforceClientRoot        <your_preferred_highlighting_group>
-"	hi link perforceKeyName           <your_preferred_highlighting_group>
-"	hi link perforceDepotFile         <your_preferred_highlighting_group>
-"	hi link perforceLocalFile         <your_preferred_highlighting_group>
-"	hi link perforceVerSep            <your_preferred_highlighting_group>
-"	hi link perforceVersion           <your_preferred_highlighting_group>
-"	hi link perforceSubmitType	  <your_preferred_highlighting_group>
-"	hi link perforceDefaultSubmitType <your_preferred_highlighting_group>
-"	hi link perforceViewExclude       <your_preferred_highlighting_group>
-"	hi link perforceDepotView         <your_preferred_highlighting_group>
-"	hi link perforceClientView        <your_preferred_highlighting_group>
-"
-"     Replace the <your_preferred_highlighting_group> with whatever group name
-"     you want, such as, Comment, Special etc.	
 "
 " TODO:
 "   Filelog definition can be more complete.
@@ -171,11 +139,11 @@ syn match perforceDate "\<\@<=\d\+/\d\+/\d\+\>\@=" contained
 syn match perforceVerStr "#\d\+" contains=perforceVerSep,perforceVersion contained
 syn match perforceVerSep "#" contained
 syn match perforceVersion "\d\+" contained
-syn keyword perforceCommands contained add admin branch branches change changes
-syn keyword perforceCommands contained client clients counter counters delete
-syn keyword perforceCommands contained depot dirs edit filelog files fix fixes
-syn keyword perforceCommands contained help info integrate integrated job
-syn keyword perforceCommands contained labelsync lock logger obliterate
+syn keyword perforceCommands contained add admin annotate branch branches change
+syn keyword perforceCommands contained changes client clients counter counters
+syn keyword perforceCommands contained delete depot dirs edit filelog files fix
+syn keyword perforceCommands contained fixes help info integrate integrated job
+syn keyword perforceCommands contained labelsync lock logger monitor obliterate
 syn keyword perforceCommands contained reopen resolve resolved revert review
 syn keyword perforceCommands contained triggers typemap unlock user users
 syn keyword perforceCommands contained verify where reviews set submit sync
