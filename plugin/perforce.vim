@@ -1,9 +1,9 @@
 " perforce.vim: Interface with p4 command.
 " Author: Hari Krishna <hari_vim@yahoo.com>
-" Last Modified: 26-Mar-2002 @ 19:36
+" Last Modified: 28-Mar-2002 @ 19:20
 " Created:       not sure, but sometime before 20-Apr-2001
-" Requires: Vim-6.0 or higher, genutils.vim(1.0.19), multvals.vim(2.1.2)
-" Version: 1.1.22
+" Requires: Vim-6.0 or higher, genutils.vim(1.0.20), multvals.vim(2.1.2)
+" Version: 1.2.2
 " Usage: 
 "   - Adds commands and menus (if enabled) to execute perforce commands. There
 "     are commands defined for most used perforce commands such as 'edit' (PE),
@@ -12,6 +12,15 @@
 "     command. But don't execute any commands that require you to enter input
 "     (such as 'submit'). There are separate commands defined for such
 "     operations, such as PSubmit for 'submit' and PC for 'client'.
+"   - You can create/edit/delete most of the specifications completely from
+"     vim. PSubmit, PClient, PUser etc. commands open the specification or
+"     create them in a new window. You can edit them like any regular file and
+"     save the specification by using the W command or the WQ (which also
+"     quits if there is no error). If there is an error, the message from
+"     perforce is shown in the same window. You can then go back and fix the
+"     problem by pressing 'u' (for undo) and try again. You can delete any
+"     specification by opening its corresponding list view (such as changes,
+"     clients, users) and pressing 'D' on the corresponding line.
 "   - Most commands take variable number of arguments. Some commands that
 "     require a filename default to current file if you didn't pass any. If
 "     you need to specify a version number, then protect the '#' symbol with
@@ -115,12 +124,19 @@
 " TODO: {{{
 "   Sort change lists and show those that are by the current client and others
 "     separately. 
+"   A command to rename files.
+"   May be I should call PFSetupBuf as soon as the new window is opened. This
+"     will avoid stray buffers when the command is aborted.
 "   How can I support interactive resolves? Will it be worth doing it? 
 "   Continuous operations on the preview winow is not clean. I do a pclose
 "     before running the next preview command, so the previous buffer is lost
 "     from the history. Since I delete buffers as soon as they are hidden,
 "     there probably is no solution for this.
-"   In filelist view, select the files to be operated upon. 
+"   In filelist view,
+"     - Print the current revision.
+"     - Sync to the current revision. 
+"     - select the files to be operated upon. 
+"   Files command on current label.
 "   POpened should take in a branch name to show the opened files under the
 "     branch (-b branchname). Also a way to open only of specified type such
 "     as add, edit, delete (-t ?).
@@ -183,8 +199,7 @@ elseif !exists("s:defaultListSize")
 endif
 
 if exists("g:p4DefaultDiffOptions")
-  let s:defaultDiffOptions="'" . substitute(g:p4DefaultDiffOptions, ' ', "', '",
-	\ 'g') . "'"
+  let s:defaultDiffOptions=substitute(g:p4DefaultDiffOptions, ' ', "', '", 'g')
   unlet g:p4DefaultDiffOptions
 elseif !exists("s:defaultDiffOptions")
   let s:defaultDiffOptions=''
@@ -271,12 +286,16 @@ endif
 
 " Equivalent to: p4 print %
 command! -nargs=* -complete=file PP :call <SID>PPrint(0, <f-args>)
+command! -nargs=* -complete=file PPring :call <SID>PPrint(0, <f-args>)
 " Equivalent to: p4 diff %. You can pass in arguments to diff and a filename.
 command! -nargs=* -complete=file PD :call <SID>PDiff(0, <f-args>)
+command! -nargs=* -complete=file PDiff :call <SID>PDiff(0, <f-args>)
 " Equivalent to: p4 edit %
 command! -nargs=* -complete=file PE :call <SID>PEdit(20, <f-args>)
+command! -nargs=* -complete=file PEdit :call <SID>PEdit(20, <f-args>)
 " Equivalent to: p4 add %
 command! -nargs=* -complete=file PA :call <SID>PAdd(20, <f-args>)
+command! -nargs=* -complete=file PAdd :call <SID>PAdd(20, <f-args>)
 " Equivalent to: p4 delete %
 command! -nargs=* -complete=file PDelete :call <SID>PDelete(20, <f-args>)
 " Equivalent to: p4 lock %
@@ -285,9 +304,11 @@ command! -nargs=* -complete=file PLock :call <SID>PLock(20, <f-args>)
 command! -nargs=* -complete=file PUnlock :call <SID>PUnlock(20, <f-args>)
 " Equivalent to: p4 revert %
 command! -nargs=* -complete=file PR :call <SID>PRevert(20, <f-args>)
+command! -nargs=* -complete=file PRevert :call <SID>PRevert(20, <f-args>)
 " Equivalent to: p4 get/sync %
 command! -nargs=* -complete=file PSync :call <SID>PSync(20, <f-args>)
 command! -nargs=* -complete=file PG :call <SID>PSync(20, <f-args>)
+command! -nargs=* -complete=file PGet :call <SID>PSync(20, <f-args>)
 " Equivalent to: p4 opened
 command! -nargs=* PO :call <SID>POpened(0, <f-args>)
 " Equivalent to: p4 have
@@ -306,10 +327,12 @@ command! -nargs=* PFilelog :call <SID>PFilelog(0, <f-args>)
 "   can pass in arguments diff2, but not a filename. The current filename is
 "   always assumed.
 command! -nargs=* -complete=file PD2 :call <SID>PDiff2(0, <f-args>)
+command! -nargs=* -complete=file PDiff2 :call <SID>PDiff2(0, <f-args>)
 " Equivalent to: p4 fstat %.
 command! -nargs=* -complete=file PFstat :call <SID>PFstat(0, <f-args>)
 " Same as: p4 help. You can drill down the help by pressing <Enter>
 command! -nargs=* PH :call <SID>PHelp(5, <f-args>)
+command! -nargs=* PHelp :call <SID>PHelp(5, <f-args>)
 
 
 """ Some list view commands.
@@ -733,6 +756,8 @@ function! s:ResetP4Vars()
   let s:p4Arguments = ""
   let s:p4LastArg = ""
   let s:p4WinName = ""
+
+  let s:errCode = 0
 endfunction
 call s:ResetP4Vars()
 
@@ -776,6 +801,8 @@ delfunction s:CreateMenu
 endfunction " s:Initialize }}}
 call s:Initialize()
 
+
+""" BEGIN: Command specific functions {{{
 
 function! s:PPrint(outputType, ...)
   exec g:makeArgumentString
@@ -826,6 +853,12 @@ endfunction
 
 function! s:PDescribe(outputType, ...)
   exec g:makeArgumentString
+  " If -s doesn't exist, and user doesn't intent to see a diff, then let us
+  "   add it. In any case he can press enter on the <SHOW DIFFS> to see it
+  "   later.
+  if match(argumentString, '-s\>') == -1 && match(argumentString, '-d.\>') == -1
+    let argumentString = s:AddCommandOptions(argumentString, 'describe', '-s')
+  endif
   let argumentString = s:AddDiffOptions(argumentString)
 
   exec "let err = s:PFIF(1, a:outputType, 1, 'describe', " . argumentString .
@@ -839,17 +872,6 @@ function! s:PDescribe(outputType, ...)
     endif
 
     call s:EndBufSetup(a:outputType)
-  endif
-endfunction
-
-
-function! s:DescribeGetCurrentItem()
-  if getline(".") == "\t<SHOW DIFFS>"
-    let b:p4FullCmd = substitute(b:p4FullCmd, '-s\>', '', '')
-    call s:PRefreshActivePane()
-    return ""
-  else
-    return s:ConvertToLocalPath(s:GetCurrentDepotFile(line('.')))
   endif
 endfunction
 
@@ -975,106 +997,6 @@ function! s:PDiff2(outputType, ...)
 endfunction
 
 
-" Open a file from an alternative codeline.
-" First argument is expected to be codeline, and the remaining arguments are
-" expected to be filenames. 
-function! s:PFOpenAltFile(...)
-  if a:0 == 0
-    " Prompt for codeline.
-    let codeline = s:PromptFor(0, s:useDialogs,
-          \ "Enter the alternative codeline: ", '')
-    if codeline == ""
-      echohl Error | echo "Codeline required." | echohl NONE
-      return
-    endif
-  else
-    let codeline = a:1
-  endif
-  " If the filenanme argument is mising, then assume it is for the current file.
-  if a:0 < 2
-    let argumentString = "'" . codeline . "'"
-    let argumentString = argumentString . ", '" . expand("%") . "'"
-  else
-    exec g:makeArgumentString
-  endif
-
-  exec "let altFileNames = s:PFGetAltFiles(" . argumentString . ")"
-  if a:0 == 1
-    let n = 1
-  else
-    let n = MvNumberOfElements(altFileNames, ';')
-  endif
-  if n == 1
-    execute ":edit " . altFileNames
-  else
-    call MvIterCreate(altFileNames, ';', "Perforce")
-    while MvIterHasNext("Perforce")
-      execute ":badd " . MvIterNext("Perforce")
-    endwhile
-    call MvIterDestroy("Perforce")
-    execute ":edit " . MvElementAt(altFileNames, ";", 0)
-  endif
-endfunction
-
-
-" Interactively change the port/client/user.
-function! s:SwitchPortClientUser()
-  let p4Port = s:PromptFor(0, s:useDialogs, "Port: ", s:p4Port)
-  let p4Client = s:PromptFor(0, s:useDialogs, "Client: ", s:p4Client)
-  let p4User = s:PromptFor(0, s:useDialogs, "User: ", s:p4User)
-  call s:PSwitch(p4Port, p4Client, p4User)
-endfunction
-
-
-" No args: Print presets and prompt user to select a preset.
-" Number: Select that numbered preset. 
-" port [client] [user]: Set the specified settings.
-function! s:PSwitch(...)
-  let nSets = MvNumberOfElements(s:p4Presets, ',')
-  if a:0 == 0
-    if nSets == 0
-      echohl ERROR | echo "No sets to select from." | echohl None
-      return
-    endif
-
-    let selectedSetting = MvPromptForElement(s:p4Presets, ',', 0,
-          \ "Select the setting: ", -1, s:useDialogs)
-    call s:PSwitchHelper(selectedSetting)
-    return
-  else
-    if match(a:1, '^\d\+') == 0
-      let index = a:1 + 0
-      if index >= nSets
-        echohl ERROR | echo "Not that many sets." | echohl None
-        return
-      endif
-      let selectedSetting = MvElementAt(s:p4Presets, ',', index)
-      call s:PSwitchHelper(selectedSetting)
-      return
-    else
-      let g:p4Port = a:1
-      if a:0 > 1
-        let g:p4Client = a:2
-      endif
-      if a:0 > 2
-        let g:p4User = a:3
-      endif
-    endif
-    call s:Initialize()
-  endif
-endfunction
-
-
-function! s:PSwitchHelper(settingStr)
-  if a:settingStr != ""
-    let settingStr = substitute(a:settingStr, '\s\+', "','", 'g')
-    let settingStr = substitute(settingStr, '^', "'", '')
-    let settingStr = substitute(settingStr, '$', "'", '')
-    exec 'call s:PSwitch(' . settingStr . ')'
-  endif
-endfunction
-
-
 function! s:PChange(outputType, ...)
   exec g:makeArgumentString
   exec "call s:InteractiveCommand(a:outputType, 'change', 'interactive', " .
@@ -1097,16 +1019,6 @@ function! s:PLabel(outputType, ...)
 endfunction
 
 
-function! s:NewClient()
-  let clientName = s:PromptFor(0, s:useDialogs, "Client name: ", '')
-  if clientName == ""
-    echohl Error | echo "Client name required." | echohl NONE
-    return
-  endif
-  call s:PClient(0, clientName)
-endfunction
-
-
 function! s:PClient(outputType, ...)
   exec g:makeArgumentString
   exec "call s:InteractiveCommand(a:outputType, 'client', 'interactive', " .
@@ -1125,16 +1037,6 @@ function! s:PJobspec(outputType, ...)
   exec g:makeArgumentString
   exec "call s:InteractiveCommand(a:outputType, 'jobspec', 'interactive', " .
         \ "'none', '^Fields:', " . argumentString . ")"
-endfunction
-
-
-function! s:NewUser()
-  let userName = s:PromptFor(0, s:useDialogs, "User name: ", '')
-  if userName == ""
-    echohl Error | echo "Client name required." | echohl NONE
-    return
-  endif
-  call s:PUser(0, userName)
 endfunction
 
 
@@ -1237,23 +1139,6 @@ function! s:PFilelog(outputType, ...)
 endfunction
 
 
-function! s:RunLimitListCommand(outputType, commandName, ...)
-  exec g:makeArgumentString
-  if match(argumentString, '-m\>') == -1 && s:defaultListSize > -1
-    " Insert -m <size> arguments just after the command name.
-    if match(argumentString, '\<' . a:commandName . '\>') != -1
-      let argumentString = substitute(argumentString, '\<' . a:commandName .
-	    \ '\>', a:commandName . "', '-m', '" . s:defaultListSize, '')
-    else
-      let argumentString = "'-m', '" . s:defaultListSize . "', " .
-	    \ argumentString
-  endif
-  exec "let err = s:PFIF(1, a:outputType, 1, a:commandName, " .
-	\ argumentString . ")"
-  return err
-endfunction
-
-
 function! s:PJobs(outputType, ...)
   exec g:makeArgumentString
   exec "let err = s:RunLimitListCommand(a:outputType, 'jobs', " .
@@ -1298,86 +1183,6 @@ function! s:PLabels(outputType, ...)
 endfunction
 
 
-function! s:InteractiveCommand(outputType, commandName, commandType,
-      \ argExpected, pattern, ...)
-
-  exec g:makeArgumentString
-  " First check if the commandName is already passed in, if not then specify
-  " it and try again.
-  exec "call s:ParseOptions(" . argumentString . ")"
-  if s:p4Command == ""
-    exec "call s:ParseOptions('" . a:commandName . "', " . argumentString . ")"
-  elseif s:p4Command != a:commandName
-    echohl ERROR | echo "Invalid command usage... try 'PH " . a:commandName .
-          \ "'" | echohl NONE
-    return
-  endif
-
-  " Check not sufficient if the user gives other arguments and forgets to give
-  "   name.
-  if s:p4LastArg == "" || s:p4Arguments == ""
-    let additionalArg = ""
-    if a:argExpected == "ask"
-      let additionalArg = s:PromptFor(0, s:useDialogs,
-            \ "Enter the " . a:commandName . " name: ", '')
-      if additionalArg == ""
-        echohl Error | echo substitute(a:commandName, "^.", '\U&', '') .
-              \ " name required." | echohl NONE
-        return
-      endif
-    elseif a:argExpected == "curfile"
-      let additionalArg = expand("%")
-    endif
-    if additionalArg != ""
-      let s:p4Arguments = MvAddElement(s:p4Arguments, ' ', additionalArg)
-    endif
-  endif
-
-  " If the command is to be run in interactive mode, then make sure the -o
-  " options is specified.
-  let interactiveMode = 0
-  if a:commandType == "interactive"
-    if match(s:p4Arguments, '-d\>') == -1
-      let s:p4Arguments = "-o " . s:p4Arguments
-      if a:outputType == 0 " Only if in the edit mode.
-      endif
-      " Go into interactive mode only if the user intends to edit the output.
-      if a:outputType == 0
-        let interactiveMode = 1
-      endif
-    endif
-  endif
-
-  if s:PFImpl(a:outputType, s:p4CommandPrefix, 0, "") != 0
-    return
-  endif
-
-  if s:StartBufSetup(a:outputType)
-    if a:pattern != "" && search(a:pattern, 'w') != 0
-      normal! zz
-    endif
-    set ft=perforce
-
-    " Set some options for text editing.
-    setlocal tabstop=8
-    setlocal softtabstop=0
-    setlocal shiftwidth=8
-    setlocal noexpandtab
-    setlocal autoindent
-
-    call s:EndBufSetup(a:outputType)
-  endif
-
-  if interactiveMode
-    setlocal modifiable
-    exec 'command! -buffer -nargs=* W :1,$call <SID>PW("' . a:commandName .
-          \ '", "-i", <f-args>)'
-    redraw | echo "When done, save " . a:commandName .
-          \ " spec by using the :W command. Undo if you see an error."
-  endif
-endfunction
-
-
 function! s:PHelp(outputType, ...)
   call SaveWindowSettings2("PerforceHelp", 0)
   " If there is a help window already open, then we need to reuse it.
@@ -1396,6 +1201,141 @@ function! s:PHelp(outputType, ...)
   endif
 endfunction
 
+""" END: Command specific functions }}}
+
+""" BEGIN: Helper functions {{{
+
+function! s:NewUser()
+  let userName = s:PromptFor(0, s:useDialogs, "User name: ", '')
+  if userName == ""
+    echohl Error | echo "Client name required." | echohl NONE
+    return
+  endif
+  call s:PUser(0, userName)
+endfunction
+
+
+function! s:NewClient()
+  let clientName = s:PromptFor(0, s:useDialogs, "Client name: ", '')
+  if clientName == ""
+    echohl Error | echo "Client name required." | echohl NONE
+    return
+  endif
+  call s:PClient(0, clientName)
+endfunction
+
+
+" Open a file from an alternative codeline.
+" First argument is expected to be codeline, and the remaining arguments are
+" expected to be filenames. 
+function! s:PFOpenAltFile(...)
+  if a:0 == 0
+    " Prompt for codeline.
+    let codeline = s:PromptFor(0, s:useDialogs,
+          \ "Enter the alternative codeline: ", '')
+    if codeline == ""
+      echohl Error | echo "Codeline required." | echohl NONE
+      return
+    endif
+  else
+    let codeline = a:1
+  endif
+  " If the filenanme argument is mising, then assume it is for the current file.
+  if a:0 < 2
+    let argumentString = "'" . codeline . "'"
+    let argumentString = argumentString . ", '" . expand("%") . "'"
+  else
+    exec g:makeArgumentString
+  endif
+
+  exec "let altFileNames = s:PFGetAltFiles(" . argumentString . ")"
+  if a:0 == 1
+    let n = 1
+  else
+    let n = MvNumberOfElements(altFileNames, ';')
+  endif
+  if n == 1
+    execute ":edit " . altFileNames
+  else
+    call MvIterCreate(altFileNames, ';', "Perforce")
+    while MvIterHasNext("Perforce")
+      execute ":badd " . MvIterNext("Perforce")
+    endwhile
+    call MvIterDestroy("Perforce")
+    execute ":edit " . MvElementAt(altFileNames, ";", 0)
+  endif
+endfunction
+
+
+" Interactively change the port/client/user.
+function! s:SwitchPortClientUser()
+  let p4Port = s:PromptFor(0, s:useDialogs, "Port: ", s:p4Port)
+  let p4Client = s:PromptFor(0, s:useDialogs, "Client: ", s:p4Client)
+  let p4User = s:PromptFor(0, s:useDialogs, "User: ", s:p4User)
+  call s:PSwitch(p4Port, p4Client, p4User)
+endfunction
+
+
+" No args: Print presets and prompt user to select a preset.
+" Number: Select that numbered preset. 
+" port [client] [user]: Set the specified settings.
+function! s:PSwitch(...)
+  let nSets = MvNumberOfElements(s:p4Presets, ',')
+  if a:0 == 0
+    if nSets == 0
+      echohl ERROR | echo "No sets to select from." | echohl None
+      return
+    endif
+
+    let selectedSetting = MvPromptForElement(s:p4Presets, ',', 0,
+          \ "Select the setting: ", -1, s:useDialogs)
+    call s:PSwitchHelper(selectedSetting)
+    return
+  else
+    if match(a:1, '^\d\+') == 0
+      let index = a:1 + 0
+      if index >= nSets
+        echohl ERROR | echo "Not that many sets." | echohl None
+        return
+      endif
+      let selectedSetting = MvElementAt(s:p4Presets, ',', index)
+      call s:PSwitchHelper(selectedSetting)
+      return
+    else
+      let g:p4Port = a:1
+      if a:0 > 1
+        let g:p4Client = a:2
+      endif
+      if a:0 > 2
+        let g:p4User = a:3
+      endif
+    endif
+    call s:Initialize()
+  endif
+endfunction
+
+
+function! s:PSwitchHelper(settingStr)
+  if a:settingStr != ""
+    let settingStr = substitute(a:settingStr, '\s\+', "','", 'g')
+    let settingStr = substitute(settingStr, '^', "'", '')
+    let settingStr = substitute(settingStr, '$', "'", '')
+    exec 'call s:PSwitch(' . settingStr . ')'
+  endif
+endfunction
+
+
+function! s:RunLimitListCommand(outputType, commandName, ...)
+  exec g:makeArgumentString
+  if match(argumentString, '-m\>') == -1 && s:defaultListSize > -1
+    let argumentString = s:AddCommandOptions(argumentString, a:commandName,
+	  \ '-m', s:defaultListSize)
+  endif
+  exec "let err = s:PFIF(1, a:outputType, 1, a:commandName, " .
+	\ argumentString . ")"
+  return err
+endfunction
+
 
 function! s:CheckOutFile()
   if filereadable(expand("%")) && ! filewritable(expand("%"))
@@ -1409,101 +1349,8 @@ function! s:CheckOutFile()
 endfunction
 
 
-" Filter contents through p4.
-function! s:PW(...) range
-  exec g:makeArgumentString
-  exec "call s:ParseOptions(" . argumentString . ")"
-
-  setlocal modifiable
-  call s:PFImpl(4, a:firstline . ',' . a:lastline . '!' . s:p4CommandPrefix, 1,
-        \ "")
-endfunction
-
-
-" The commandName may not be the commandName always when the user types in,
-"   but at least it is (and should be), for the scriptOrigin.
-" argOptions: A combination string of one or more of the following flags.
-"   0 - No special handling.
-"   1 - Default to current file. 
-"   2 - Treat the number arg as a version to the current file. 
-function! s:PFIF(scriptOrigin, outputType, argOptions, commandName, ...)
-  exec g:makeArgumentString
-    " For scriptOrigin, there is a possibility of having the commandName
-    "   already in the var. args.
-  if MvContainsElement(s:p4KnownCmds, ',', a:commandName) && a:scriptOrigin
-    exec "call s:ParseOptions(" . argumentString . ")"
-    " Add a:commandName only if it doesn't already exist in the var args. 
-    " Handles cases like "PF help submit" and "PF -c <client> help submit",
-    "   where the commandName need not be at the starting and there could be
-    "   more than one valid commandNames (help and submit).
-    if s:p4Command != a:commandName
-      exec "call s:ParseOptions('" . a:commandName . "', " . argumentString .
-            \ ")"
-    endif
-  else
-    exec "call s:ParseOptions('" . a:commandName . "', " . argumentString . ")"
-  endif
-
-  if ! a:scriptOrigin
-    let redirect = s:getCommandHandler(s:p4Command)
-    if redirect != ""
-      exec "call " . redirect . "(" . a:outputType . ", '" . a:commandName .
-            \ "', " . argumentString . ")"
-      return 0
-    endif
-  endif
-
-  " Handle arguments based on the argOptions.
-  if a:argOptions =~ "1" && s:p4LastArg == ""
-    " I expect s:p4Arguments to be empty in this case, but just in case...
-    let s:p4Arguments = MvAddElement(s:p4Arguments, ' ', expand("%"))
-  endif
-  if a:argOptions =~ "2" && s:p4LastArg =~ '^[\\]\+#\(\d\+\|none\|head\|have\)$'
-    let s:p4Arguments = substitute(s:p4Arguments,
-          \ '[\\]\+#\(\d\+\|none\|head\|have\)$', expand("%") . '\\#\1', '')
-  endif
-  if a:argOptions =~ "2" && s:p4LastArg =~ '^@\S\+$'
-    let s:p4Arguments = substitute(s:p4Arguments, '@\S\+$',
-          \ expand("%") . '&', '')
-    let s:p4Arguments = expand("%") . s:p4LastArg
-  endif
-
-  if s:p4Command == 'help' 
-    " Use simple window name for all the help commands.
-    let s:p4WinName = s:helpWinName
-  endif
-
-  let err = s:PFImpl(a:outputType, s:p4CommandPrefix, 0, "")
-  if err != 0
-    return err
-  endif
-
-  if s:StartBufSetup(a:outputType)
-    " If this command has a handler for the individual items, then enable the
-    " item selection commands.
-    if s:getCommandItemHandler(s:p4Command) != ""
-      call s:SetupSelectItem()
-    endif
-    set ft=perforce
-
-    call s:EndBufSetup(a:outputType)
-  endif
-
-  return 0
-endfunction
-
-
 function! s:LookupValue(key, type)
   exec 'return s:' . a:key . '_' . a:type
-endfunction
-
-
-" Generate raw output into a new window.
-function! s:PFRaw(outputType, ...)
-  exec g:makeArgumentString
-  exec "call s:ParseOptions(" . argumentString . ")"
-
-  call s:PFImpl(a:outputType, s:p4CommandPrefix, 0, "")
 endfunction
 
 
@@ -1528,6 +1375,17 @@ function! s:getCommandHandler(command)
     return handler
   else
     return ""
+  endif
+endfunction
+
+
+function! s:DescribeGetCurrentItem()
+  if getline(".") == "\t<SHOW DIFFS>"
+    let b:p4FullCmd = substitute(b:p4FullCmd, '-s\>', '', '')
+    call s:PRefreshActivePane()
+    return ""
+  else
+    return s:ConvertToLocalPath(s:GetCurrentDepotFile(line('.')))
   endif
 endfunction
 
@@ -1669,16 +1527,27 @@ endfunction
 
 
 function! s:AddDiffOptions(argString)
-  let argumentString = a:argString
-  if s:defaultDiffOptions != ""
-    if match(argumentString, '\<diff\>') == -1
-      let argumentString = s:defaultDiffOptions . ', ' . argumentString
-    else
-      let argumentString = substitute(argumentString, "\\<diff\\>'", "diff', " .
-	    \ s:defaultDiffOptions, '')
-    endif
+  let argString = a:argString
+  if match(argString, '-d.\>') == -1 && s:defaultDiffOptions != ""
+    let argString = s:AddCommandOptions(argString, 'diff', s:defaultDiffOptions)
   endif
-  return argumentString
+  return argString
+endfunction
+
+
+function! s:AddCommandOptions(argString, commandName, ...)
+  exec g:makeArgumentString
+
+  let argString = a:argString
+  " If commandName exists in the argString, then insert the options just after
+  " it, otherwise just prefix the argString with the new options.
+  if match(argString, '\<' . a:commandName . '\>') != -1
+    let argString = substitute(argString, '\<' . a:commandName .
+	  \ "\\>'", a:commandName . "', " . argumentString, '')
+  else
+    let argString = argumentString . ', ' . argString
+  endif
+  return argString
 endfunction
 
 
@@ -1725,7 +1594,6 @@ endfunction
 
 
 function! s:RestoreWindows(dummy)
-  echomsg "Perforce.RestoreWindows: " . a:dummy . " nwindows = " . NumberOfWindows()
   call RestoreWindowSettings2("PerforceHelp")
   call s:PFExecBufClean(s:helpWinName)
 endfunction
@@ -1745,16 +1613,212 @@ function! s:Navigate(key)
   let _modifiable = &l:modifiable
   setlocal modifiable
   normal mt
+  let _report = &report
+  set report=99999
+
   exec "normal" a:key
+
+  let &report = _report
   if line("'t")
     normal `t
   endif
   let &l:modifiable = _modifiable
 endfunction
 
-"
-" Infrastructure.
-"
+
+""" END: Helper functions }}}
+
+""" BEGIN: Middleware functions {{{
+
+" Filter contents through p4.
+function! s:PW(...) range
+  exec g:makeArgumentString
+  exec "call s:ParseOptions(" . argumentString . ")"
+
+  setlocal modifiable
+  let err = s:PFImpl(4, a:firstline . ',' . a:lastline . '!' .
+        \ s:p4CommandPrefix, 1, "")
+  return err
+endfunction
+
+
+" Generate raw output into a new window.
+function! s:PFRaw(outputType, ...)
+  exec g:makeArgumentString
+  exec "call s:ParseOptions(" . argumentString . ")"
+
+  call s:PFImpl(a:outputType, s:p4CommandPrefix, 0, "")
+endfunction
+
+
+function! s:InteractiveCommand(outputType, commandName, commandType,
+      \ argExpected, pattern, ...)
+
+  exec g:makeArgumentString
+  " First check if the commandName is already passed in, if not then specify
+  " it and try again.
+  exec "call s:ParseOptions(" . argumentString . ")"
+  if s:p4Command == ""
+    exec "call s:ParseOptions('" . a:commandName . "', " . argumentString . ")"
+  elseif s:p4Command != a:commandName
+    echohl ERROR | echo "Invalid command usage... try 'PH " . a:commandName .
+          \ "'" | echohl NONE
+    return
+  endif
+
+  " Check not sufficient if the user gives other arguments and forgets to give
+  "   name.
+  if s:p4LastArg == "" || s:p4Arguments == ""
+    let additionalArg = ""
+    if a:argExpected == "ask"
+      let additionalArg = s:PromptFor(0, s:useDialogs,
+            \ "Enter the " . a:commandName . " name: ", '')
+      if additionalArg == ""
+        echohl Error | echo substitute(a:commandName, "^.", '\U&', '') .
+              \ " name required." | echohl NONE
+        return
+      endif
+    elseif a:argExpected == "curfile"
+      let additionalArg = expand("%")
+    endif
+    if additionalArg != ""
+      let s:p4Arguments = MvAddElement(s:p4Arguments, ' ', additionalArg)
+    endif
+  endif
+
+  " If the command is to be run in interactive mode, then make sure the -o
+  " options is specified.
+  let interactiveMode = 0
+  if a:commandType == "interactive"
+    if match(s:p4Arguments, '-d\>') == -1
+      let s:p4Arguments = "-o " . s:p4Arguments
+      if a:outputType == 0 " Only if in the edit mode.
+      endif
+      " Go into interactive mode only if the user intends to edit the output.
+      if a:outputType == 0
+        let interactiveMode = 1
+      endif
+    endif
+  endif
+
+  if s:PFImpl(a:outputType, s:p4CommandPrefix, 0, "") != 0
+    return
+  endif
+
+  if s:StartBufSetup(a:outputType)
+    if a:pattern != "" && search(a:pattern, 'w') != 0
+      normal! zz
+    endif
+    set ft=perforce
+
+    " Set some options for text editing.
+    setlocal tabstop=8
+    setlocal softtabstop=0
+    setlocal shiftwidth=8
+    setlocal noexpandtab
+    setlocal autoindent
+
+    call s:EndBufSetup(a:outputType)
+  endif
+
+  if interactiveMode
+    setlocal modifiable
+    exec 'command! -buffer -nargs=* W :call <SID>W(0, "' . a:commandName .
+          \ '", <f-args>)'
+    exec 'command! -buffer -nargs=* WQ :call <SID>W(1, "' . a:commandName .
+          \ '", <f-args>)'
+    redraw | echo "When done, save " . a:commandName .
+          \ " spec by using the :W command. Undo if you see an error."
+  endif
+endfunction
+
+
+function! s:W(shouldQuit, commandName, ...)
+  exec g:makeArgumentString
+  " Work-arond for the error code can't be returned from a range function.
+  "exec "let err = 1,$s:PW(a:commandName, '-i', " . argumentString . ")"
+  exec "1,$call s:PW(a:commandName, '-i', " . argumentString . ")"
+  if a:shouldQuit && s:errCode == 0
+    quit
+  endif
+endfunction
+
+
+" The commandName may not be the commandName always when the user types in,
+"   but at least it is (and should be), for the scriptOrigin.
+" argOptions: A combination string of one or more of the following flags.
+"   0 - No special handling.
+"   1 - Default to current file. 
+"   2 - Treat the number arg as a version to the current file. 
+function! s:PFIF(scriptOrigin, outputType, argOptions, commandName, ...)
+  exec g:makeArgumentString
+    " For scriptOrigin, there is a possibility of having the commandName
+    "   already in the var. args.
+  if MvContainsElement(s:p4KnownCmds, ',', a:commandName) && a:scriptOrigin
+    exec "call s:ParseOptions(" . argumentString . ")"
+    " Add a:commandName only if it doesn't already exist in the var args. 
+    " Handles cases like "PF help submit" and "PF -c <client> help submit",
+    "   where the commandName need not be at the starting and there could be
+    "   more than one valid commandNames (help and submit).
+    if s:p4Command != a:commandName
+      exec "call s:ParseOptions('" . a:commandName . "', " . argumentString .
+            \ ")"
+    endif
+  else
+    exec "call s:ParseOptions('" . a:commandName . "', " . argumentString . ")"
+  endif
+
+  if ! a:scriptOrigin
+    let redirect = s:getCommandHandler(s:p4Command)
+    if redirect != ""
+      exec "call " . redirect . "(" . a:outputType . ", '" . a:commandName .
+            \ "', " . argumentString . ")"
+      return 0
+    endif
+  endif
+
+  " Handle arguments based on the argOptions.
+  if a:argOptions =~ "1" && s:p4LastArg == ""
+    " I expect s:p4Arguments to be empty in this case, but just in case...
+    let s:p4Arguments = MvAddElement(s:p4Arguments, ' ', expand("%"))
+  endif
+  if a:argOptions =~ "2" && s:p4LastArg =~ '^[\\]\+#\(\d\+\|none\|head\|have\)$'
+    let s:p4Arguments = substitute(s:p4Arguments,
+          \ '[\\]\+#\(\d\+\|none\|head\|have\)$', expand("%") . '\\#\1', '')
+  endif
+  if a:argOptions =~ "2" && s:p4LastArg =~ '^@\S\+$'
+    let s:p4Arguments = substitute(s:p4Arguments, '@\S\+$',
+          \ expand("%") . '&', '')
+    let s:p4Arguments = expand("%") . s:p4LastArg
+  endif
+
+  if s:p4Command == 'help' 
+    " Use simple window name for all the help commands.
+    let s:p4WinName = s:helpWinName
+  endif
+
+  let err = s:PFImpl(a:outputType, s:p4CommandPrefix, 0, "")
+  if err != 0
+    return err
+  endif
+
+  if s:StartBufSetup(a:outputType)
+    " If this command has a handler for the individual items, then enable the
+    " item selection commands.
+    if s:getCommandItemHandler(s:p4Command) != ""
+      call s:SetupSelectItem()
+    endif
+    set ft=perforce
+
+    call s:EndBufSetup(a:outputType)
+  endif
+
+  return 0
+endfunction
+
+""" END: Middleware functions }}}
+
+""" BEGIN: Infrastructure {{{
 
 
 " Assumes that the arguments are already parsed and are ready to be used in
@@ -1775,7 +1839,8 @@ endfunction
 "   1 - Execute p4 as a filter for the current window contents. Use 
 "         commandPrefix to restrict the filter range.
 "   2 - Don't execute p4. The output is already passed in. 
-" Returns non-zero error-code on failure. 
+" Returns non-zero error-code on failure. It is also available in s:errCode
+"   variable.
 function! s:PFImpl(outputType, commandPrefix, commandType, output)
   let outputType = a:outputType
   let _report = &report
@@ -1788,7 +1853,7 @@ function! s:PFImpl(outputType, commandPrefix, commandType, output)
   " save the name of the current file.
   let p4CurFileName = expand("%")
 
-  let error = 0
+  let s:errCode = 0
   if a:commandType == 0
     " If it placing the output in a new window, then we shouldn't use system()
     "   for efficiency reasons.
@@ -1796,7 +1861,7 @@ function! s:PFImpl(outputType, commandPrefix, commandType, output)
       " Assume the shellredir is set correctly to capture the error messages.
       let output = system(fullCmd)
 
-      let error = s:CheckShellError(output)
+      let s:errCode = s:CheckShellError(output)
     else
       let output = ""
     endif
@@ -1804,12 +1869,12 @@ function! s:PFImpl(outputType, commandPrefix, commandType, output)
     silent! exec fullCmd
     let output = ""
 
-    let error = s:CheckShellError(output)
+    let s:errCode = s:CheckShellError(output)
   elseif a:commandType == 2
     let output = a:output
   endif
 
-  if error == 0
+  if s:errCode == 0
     if outputType == 20
       let nLines = strlen(substitute(output, "[^\n]", "", "g"))
       if nLines > s:maxLinesInDialog
@@ -1848,7 +1913,7 @@ function! s:PFImpl(outputType, commandPrefix, commandType, output)
       1,$d " Just in case.
       if a:commandType == 0 && output == ""
 	exec ".!" . fullCmd
-	let error = s:CheckShellError(output)
+	let s:errCode = s:CheckShellError(output)
       else
 	put! =output
       endif
@@ -1866,7 +1931,7 @@ function! s:PFImpl(outputType, commandPrefix, commandType, output)
       1,$d " Just in case.
       if a:commandType == 0 && output == ""
         exec ".!" . fullCmd
-        let error = s:CheckShellError(output)
+        let s:errCode = s:CheckShellError(output)
       else
         put! =output
       endif
@@ -1888,7 +1953,7 @@ function! s:PFImpl(outputType, commandPrefix, commandType, output)
     endif
   endif
   let &report = _report
-  return error
+  return s:errCode
 endfunction
 
 
@@ -2152,4 +2217,7 @@ function! s:PRefreshActivePane()
     let &l:modifiable=_modifiable
   endif
 endfunction
+
+""" END: Infrastructure }}}
+
 " vim6:fdm=marker
