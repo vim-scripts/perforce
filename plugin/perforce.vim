@@ -1,51 +1,58 @@
 " perforce.vim: Interface with p4 command.
 " Author: Hari Krishna <hari_vim@yahoo.com>
-" Last Modified: 17-Mar-2002 @ 22:26
+" Last Modified: 18-Mar-2002 @ 15:53
 " Created:       not sure, but sometime before 20-Apr-2001
 " Requires: Vim-6.0 or higher, genutils.vim(1.0.15), multvals.vim(2.1.2)
-" Version: 1.1.14
+" Version: 1.1.15
 " Usage: 
-"   Adds commands and menus (if enabled) to execute perforce commands. There
+"   - Adds commands and menus (if enabled) to execute perforce commands. There
 "     are commands defined for most used perforce commands such as 'edit' (PE),
 "     'opened' (PO) etc. The generic PF command lets you execute any arbitrary
 "     perforce command, and opens a new window with the output of that
 "     command. But don't execute any commands that require you to enter input
 "     (such as 'submit'). There are separate commands defined for such
 "     operations, such as PSubmit for 'submit' and PC for 'client'.
-"   Most commands take variable number of arguments. Some commands that
+"   - Most commands take variable number of arguments. Some commands that
 "     require a filename default to current file if you didn't pass any. If
 "     you need to specify a version number, then protect the '#' symbol with
 "     a backslash.
-"   When you are in a list view, such as "PF labels" or "PO", you can
+"   - When you are in a list view, such as "PF labels" or "PO", you can
 "     press <Enter> to view the current item in a preview window and O to edit
 "     it. You can also press D to delete the current item, when it is
 "     applicable. You can also use the PItemDescribe, PItemOpen, or the
 "     PItemDelete commands.
-"   If you are on the opened or files window, then you can use O for open, R
+"   - In addition, if you are on a file list view, you can press P to fstat
+"     the current file, D to show a diff with the depot and R to revert the
+"     changes for that file. You can also use the PFileProps, PFileDiff and
+"     PFileRevert commands respectively.
+"   - Filelog window has a special feature to take diff between two versions.
+"     To do this, select all the lines between the two version, inclusive, and
+"     press D or use PFilelogDiff command.
+"   - If you are on the opened or files window, then you can use O for open, R
 "     for revert, P for properties (fstat) and D for diff.
-"   In the perforce help window, you can use K, <CR> or mouse double click to
+"   - In the perforce help window, you can use K, <CR> or mouse double click to
 "     on any command name to get the help for that command. You can use Ctrl-O
 "     or u and Ctrl-R and <Tab> to navigate the help history.
-"   Set the g:p4Client, g:p4User, g:p4Port and g:p4CodelineRoot variables in
+"   - Set the g:p4Client, g:p4User, g:p4Port and g:p4CodelineRoot variables in
 "     your .vimrc, or some defaults will be chosen. 
-"   If you want to switch to a different perforce server, or just switch to a
+"   - If you want to switch to a different perforce server, or just switch to a
 "     different client, without leaving Vim or needing to change any environment
 "     variables, then you can use the PSwitch command (or the Settings menu).
 "     You can set the most used configurations as comma separated list of
 "     "{port} {client} {user}" to the g:p4Presets variable and specify the
 "     index (starting from 0) to this command.
-"   When you want to change any of the script options without restarting Vim,
+"   - When you want to change any of the script options without restarting Vim,
 "     you can use the PFInitialize to reinitialize the script from the
 "     environmental variables.  You can e.g., disable menus by setting the
 "     value of g:p4EnableMenu to 0 and run PFInitialize.
-"   You can also set g:p4DefaultOptions to options that are specified in the
+"   - You can also set g:p4DefaultOptions to options that are specified in the
 "     "p4 help usage", so that these options are always passed to p4 command.
-"   To enable menus, set the g:p4EnableMenu and/or g:p4EnablePopupMenu as per
+"   - To enable menus, set the g:p4EnableMenu and/or g:p4EnablePopupMenu as per
 "     your taste. You can also set the g:p4UseExpandedMenu to enable more
 "     complete menus, on the lines of p4Win. By default, a basic menu is
 "     created. There are also g:p4EnablePopupMenu and g:p4UseExpandedPopupMenu
 "     options to create the Perforce PopUp menu group.
-"   If you are manually sourcing the scripts either from vimrc or from
+"   - If you are manually sourcing the scripts either from vimrc or from
 "     commandline, make sure to source multvals.vim and genutils.vim first.
 "
 " Environment: 
@@ -73,15 +80,17 @@
 "         file listing views, opened, have and files.
 "     commands. 
 "   Adds 
-"       O - for open/edit current file (in the list view), or opened files (in
-"           the current change list).
-"       <CR> and <2-LeftMouse> - for describe current item.
-"       D - for delete (in filelist view), or diff (in filelog) current file.
-"       S - for sync to the current version (in filelog) .
-"       C - for describe current change list (in filelog or changes).
-"       P - for print properties of the current file.
-"       R - for revert current file.
-"       S - to submit current change.
+"       O    - for open/edit current item (in the list view),
+"       <2-LeftMouse> or
+"       <CR> - for describe current item.
+"       D    - for delete current item (in filelist view),
+"              or diff (in filelog) current file.
+"       S    - for sync to the current version (in filelog) .
+"       o    - list opened files (in the current change list).
+"       C    - for describe current change list (in filelog or changes).
+"       P    - for print properties of the current file.
+"       R    - for revert current file.
+"       S    - to submit current change.
 "     normal-mode mappings, only in the relevant p4 windows.
 "   Adds 
 "       Perforce
@@ -102,6 +111,9 @@
 "     very inconvenient.
 "   How can I support interactive resolves? Will it be worth doing it? 
 "   Show/hide diff on describe window? 
+"   Diff options to allow standard options to be passed in all the diff
+"     operations. 
+"   In filelist view, select the files to be operated upon. 
 "   It will be nice to reuse help windows for all the help commands.
 "   Define a syntax file for perforce syntax. May be one for the help window
 "     too to highlight the perforce help keywords.
@@ -114,10 +126,13 @@
 "   The script is not much intelligent wrt to obtaining the settings from p4.
 "     E.g., it assumes that the local directory name is same as the branch
 "     name.
+"   A new outputType for PFImpl() which is essentially 2 but behaves like 0 if
+"     the output is too big. Commands like revert, sync should use this mode.
 "   Something to enable/disable and switch between basic and expanded menus
 "     will be good.
 "   The list specific menus should be disabled unless you are in that window. 
 "   Verify that the autocommands are not leaking.
+"   Backup/Restore commands for opened files.
 
 if exists("loaded_perforce")
   finish
@@ -769,10 +784,10 @@ function! s:SetupFileBrowse(outputType)
     command! -buffer -nargs=0 PFileDiff :call <SID>PDiff(1,
           \ <SID>ConvertToLocalPath(<SID>GetCurrentDepotFile(line("."))))
     nnoremap <silent> <buffer> D :PFileDiff<CR>
-    command! -buffer -nargs=0 PFileProps :call <SID>PFIF(1, 1, 0, 'fstat', '-C',
+    command! -buffer -nargs=0 PFileProps :call <SID>PFstat(0, '-C',
           \ <SID>ConvertToLocalPath(<SID>GetCurrentDepotFile(line("."))))
     nnoremap <silent> <buffer> P :PFileProps<CR>
-    command! -buffer -nargs=0 PFileRevert :call <SID>PFIF(1, 2, 0, 'revert',
+    command! -buffer -nargs=0 PFileRevert :call <SID>PRevert(2,
           \ <SID>ConvertToLocalPath(<SID>GetCurrentDepotFile(line("."))))
     nnoremap <silent> <buffer> R :PFileRevert<CR>
 
@@ -1177,6 +1192,9 @@ function! s:PChanges(outputType, ...)
   exec "let err = s:PFIF(1, a:outputType, 1, 'changes', " . argumentString . ")"
 
   if !err && s:StartBufSetup(a:outputType)
+    silent! nunmap <buffer> D " No meaning for delete.
+    delcommand PItemDelete
+
     command! -buffer -nargs=0 PItemDescribe :call <SID>PDescribe(1, '-s',
           \ <SID>GetCurrentItem())
     command! -buffer -nargs=0 PChangesSubmit
@@ -1184,7 +1202,7 @@ function! s:PChanges(outputType, ...)
     nnoremap <silent> <buffer> S :PChangesSubmit<CR>
     command! -buffer -nargs=0 PChangesOpened :call <SID>POpened(0, '-c',
           \ <SID>GetCurrentItem())
-    nnoremap <silent> <buffer> O :PChangesOpened<CR>
+    nnoremap <silent> <buffer> o :PChangesOpened<CR>
 
     call s:EndBufSetup(a:outputType)
   endif
@@ -1193,7 +1211,7 @@ endfunction
 
 function! s:PLabels(outputType, ...)
   exec g:makeArgumentString
-  exec "let err = s:PFIF(1, a:outputType, 1, 'labels', " . argumentString . ")"
+  exec "let err = s:PFIF(1, a:outputType, 0, 'labels', " . argumentString . ")"
 
   if !err && s:StartBufSetup(a:outputType)
     command! -buffer -nargs=0 PLabelsSyncClient
@@ -1404,9 +1422,7 @@ endfunction
 
 
 " Handler for opened command.
-" TODO: The variable number of arguments is a temp. work-around to avoid error
-" if user mistakenly trys to execute delete on the opened list.
-function! s:OpenFile(outputType, fileName, ...)
+function! s:OpenFile(outputType, fileName)
   if filereadable(a:fileName)
     if a:outputType == 0
       exec "split " . a:fileName
@@ -1567,9 +1583,6 @@ endfunction
 
 
 function! s:SetupSelectItem()
-  " TODO: I do a silent! indirect execution here instead executing the command
-  "   directly, just to work-around the problem that the buffer mappings can't
-  "   be unmapped.
   nnoremap <buffer> <silent> D :silent! exec "PItemDelete"<CR>
   nnoremap <buffer> <silent> O :silent! exec "PItemOpen"<CR>
   nnoremap <buffer> <silent> <CR> :silent! exec "PItemDescribe"<CR>
@@ -1594,7 +1607,6 @@ endfunction
 "
 
 
-" TODO: avoid processing help argument.
 " Assumes that the arguments are already parsed and are ready to be used in
 "   the script variables.
 " Low level interface with the p4 command.
@@ -1898,8 +1910,13 @@ endfunction
 " Arrange an autocommand such that the buffer is automatically deleted when the
 "  window is quit. Delete the autocommand itself when done.
 function! s:PFSetupBufAutoClean(p4WinName)
+  aug Perforce
+  " Just in case the autocommands are leaking, this will curtail the leak a
+  "   little bit.
+  exec "au! BufWinLeave " . escape(a:p4WinName, ' ')
   exec "au BufWinLeave " . escape(a:p4WinName, ' ') .
         \ " :call <SID>PFExecBufClean('" . a:p4WinName . "')"
+  aug END
 endfunction
 
 
