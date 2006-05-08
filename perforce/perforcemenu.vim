@@ -1,9 +1,9 @@
 " perforcemenu.vim: Create a menu for perforce plugin.
 " Author: Hari Krishna (hari_vim at yahoo dot com)
-" Last Change: 27-Oct-2004 @ 19:33
+" Last Change: 15-Mar-2005 @ 14:20
 " Created:     07-Nov-2003
 " Requires:    Vim-6.2, perforce.vim(3.0), multvals.vim(3.3)
-" Version:     1.1.0
+" Version:     1.2.0
 " Licence: This program is free software; you can redistribute it and/or
 "          modify it under the terms of the GNU General Public License.
 "          See http://www.gnu.org/copyleft/gpl.txt 
@@ -11,7 +11,7 @@
 if !exists("loaded_perforce")
   runtime plugin/perforce.vim
 endif
-if !exists("loaded_perforce") || loaded_perforce != 300
+if !exists("loaded_perforce") || loaded_perforce < 300
   echomsg "perforcemenu: You need a newer version of perforce.vim plugin"
   finish
 endif
@@ -37,7 +37,7 @@ function! s:Get(setting, ...)
 endfunction
 
 function! s:PFExecCmd(cmd) " {{{
-  if exists(':'.a:cmd)
+  if exists(':'.a:cmd) == 2
     exec a:cmd
   else
     call PFCall("s:EchoMessage", 'The command: ' . a:cmd .
@@ -129,7 +129,7 @@ function! s:CreateMenu(sub, expanded)
       while index < nSets
         let nextSet = MvElementAt(p4Presets, ',', index)
         exec 'amenu <silent> ' . a:sub . '&Perforce.&Settings.&' . index . '\ '
-              \ . escape(nextSet, ' .') . ' :PSwitch ' . index . '<CR>'
+              \ . escape(nextSet, ' .') . ' :PFSwitch ' . index . '<CR>'
         let index = index + 1
       endwhile
     endif
@@ -208,7 +208,7 @@ function! s:CreateMenu(sub, expanded)
 	  \ ' :PClient<CR>'
     exec 'amenu <silent> ' . a:sub . '&Perforce.Cl&ient.-Sep- :'
     exec 'amenu <silent> ' . a:sub . '&Perforce.Cl&ient.&Switch\ to\ Current' .
-          \ '\ Client :exec "PSwitch ' . s:Get('Port') .
+          \ '\ Client :exec "PFSwitch ' . s:Get('Port') .
           \ ' " . PFCall("s:GetCurrentItem")<CR>'
     exec 'amenu <silent> ' . a:sub .
           \ '&Perforce.Cl&ient.&View\ ClientSpecs :PClients<CR>'
@@ -230,7 +230,7 @@ function! s:CreateMenu(sub, expanded)
 	  \ escape(s:Get('User', 'Current User'), ' ') . ' :PUser<CR>'
     exec 'amenu <silent> ' . a:sub . '&Perforce.&User.-Sep- :'
     exec 'amenu <silent> ' . a:sub . '&Perforce.&User.&Switch\ to\ Current' .
-          \ '\ User :exec "PSwitch ' . s:Get('Port') . ' ' .
+          \ '\ User :exec "PFSwitch ' . s:Get('Port') . ' ' .
 	  \ s:Get('Client') . ' " . PFCall("s:GetCurrentItem")<CR>'
     exec 'amenu <silent> ' . a:sub .
           \ '&Perforce.&User.&View\ Users :PUsers<CR>'

@@ -1,9 +1,9 @@
 " perforce.vim: Interface with perforce SCM through p4.
 " Author: Hari Krishna (hari_vim at yahoo dot com)
-" Last Change: 28-Oct-2004 @ 18:25
+" Last Change: 21-Jun-2005 @ 18:15
 " Created:     Sometime before 20-Apr-2001
 " Requires:    Vim-6.3, genutils.vim(1.14), multvals.vim(3.6)
-" Version:     3.1.1
+" Version:     3.2.2
 " Licence: This program is free software; you can redistribute it and/or
 "          modify it under the terms of the GNU General Public License.
 "          See http://www.gnu.org/copyleft/gpl.txt 
@@ -15,6 +15,7 @@
 "     For detailed help, see ":help perforce" or read doc/perforce.txt. 
 "
 " TODO: {{{
+"   - Launch from describe window is not using the local path.
 "
 "   - I need a test suite to stop things from breaking.
 "   - Should the client returned by g:p4CurPresetExpr be made permanent?
@@ -140,11 +141,11 @@ endif
 if !exists('loaded_genutils')
   runtime plugin/genutils.vim
 endif
-if !exists('loaded_genutils') || loaded_genutils < 114
+if !exists('loaded_genutils') || loaded_genutils < 119
   echomsg 'perforce: You need a newer version of genutils.vim plugin'
   finish
 endif
-let loaded_perforce=300
+let loaded_perforce=400
 
 " Make sure line-continuations won't cause any problem. This will be restored
 "   at the end
@@ -213,6 +214,7 @@ if !exists("s:p4CmdPath") " The first-time only, initialize with defaults.
   let s:curPresetExpr = ''
   let s:curDirExpr = ''
   let s:useClientViewMap = 1
+  let s:vdiffCounter = 0
 else
   let firstTimeInit = 0
 endif
@@ -294,7 +296,7 @@ if s:rulerEnabled
     let orgWidth = 20
     let orgRuler = '%l,%c%V%=%5(%p%%%)'
   endif
-  let &rulerformat = '%' . (orgWidth + s:rulerWidth) .  '(%{' . s:myScriptId .
+  let &rulerformat = '%' . (orgWidth + s:rulerWidth) .  '(%{' .
         \ 'P4RulerStatus()}%=' . orgRuler . '%)'
 else
   if exists("s:orgRulerFormat")
@@ -392,6 +394,8 @@ command! -nargs=* -complete=custom,<SID>PFComplete PH
       \ :call <SID>helpHdlr(0, 0, <f-args>)
 command! -nargs=* -complete=custom,<SID>PFComplete PHelp
       \ :call <SID>helpHdlr(0, 0, <f-args>)
+command! -nargs=* PPasswd
+      \ :call <SID>passwdHdlr(0, 2, <f-args>)
 
 
 """ Some list view commands.
@@ -440,7 +444,7 @@ command! -nargs=* -complete=custom,<SID>PFComplete PResolve
       \ :call <SID>resolveHdlr(0, 0, <f-args>)
 
 " Some built-in commands.
-command! -nargs=? -complete=custom,<SID>PFComplete PVDiff
+command! -nargs=* -complete=custom,<SID>PFComplete PVDiff
       \ :call <SID>PFIF(0, 0, "vdiff", <f-args>)
 command! -nargs=* -complete=custom,<SID>PFComplete PVDiff2
       \ :call <SID>PFIF(0, 0, "vdiff2", <f-args>)
@@ -461,7 +465,8 @@ command! -nargs=* -complete=custom,<SID>PFSettingsComplete PFS
       \ :PFSettings <args>
 command! -nargs=* -complete=custom,<SID>PFSettingsComplete PFSettings
       \ :call <SID>PFSettings(<f-args>)
-command! -nargs=0 PFDiffOff :call CleanDiffOptions()
+command! -nargs=0 PFDiffOff :call <SID>PFDiffOff(
+      \ exists('w:p4VDiffWindow') ? w:p4VDiffWindow : -1)
 command! -nargs=? PFWipeoutBufs :call <SID>WipeoutP4Buffers(<f-args>)
 "command! -nargs=* -complete=file -range=% PF
 command! -nargs=* -complete=custom,<SID>PFComplete -range=% PF
@@ -514,13 +519,25 @@ endif
 " Special characters in a filename that are not acceptable in a filename (as a
 "   window title) on windows.
 let s:specialChars = '\([*:?"<>|]\)' 
-let s:specialChars{'*'} = 'S'
-let s:specialChars{':'} = 'C'
-let s:specialChars{'?'} = 'Q'
-let s:specialChars{'"'} = 'D'
-let s:specialChars{'<'} = 'L'
-let s:specialChars{'>'} = 'G'
-let s:specialChars{'|'} = 'P'
+if v:version < 700
+let s:specialCharsMap{'*'} = 'S'
+let s:specialCharsMap{':'} = 'C'
+let s:specialCharsMap{'?'} = 'Q'
+let s:specialCharsMap{'"'} = 'D'
+let s:specialCharsMap{'<'} = 'L'
+let s:specialCharsMap{'>'} = 'G'
+let s:specialCharsMap{'|'} = 'P'
+else
+let s:specialCharsMap = {
+      \   '*': 'S',
+      \   ':': 'C',
+      \   '?': 'Q',
+      \   '"': 'D',
+      \   '<': 'L',
+      \   '>': 'G',
+      \   '|': 'P',
+      \ }
+endif
 
 "
 " A lot of metadata on perforce command syntax and handling.
@@ -529,10 +546,10 @@ let s:specialChars{'|'} = 'P'
 let s:p4KnownCmds = "add,admin,annotate,branch,branches,change,changes," .
       \ "client,clients,counter,counters,delete,depot,depots,describe,diff," .
       \ "diff2,dirs,edit,filelog,files,fix,fixes,flush,fstat,get,group," .
-      \ "groups,have,help,info,integrate,integrated,job,jobs,jobspec,label," .
-      \ "labels,labelsync,lock,logger,monitor,obliterate,opened,passwd,print," .
-      \ "protect,rename,reopen,resolve,resolved,revert,review,reviews,set," .
-      \ "submit,sync,triggers,typemap,unlock,user,users,verify,where,"
+      \ "groups,have,help,info,integ,integrate,integrated,job,jobs,jobspec," .
+      \ "label,labels,labelsync,lock,logger,monitor,obliterate,opened,passwd," .
+      \ "print,protect,rename,reopen,resolve,resolved,revert,review,reviews," .
+      \ "set,submit,sync,triggers,typemap,unlock,user,users,verify,where,"
 " Add some built-in commands to this list.
 let s:builtinCmds = "vdiff,vdiff2,exec,"
 let s:allCommands = s:p4KnownCmds . s:builtinCmds
@@ -728,7 +745,7 @@ let s:p4ContextSeparator = ":::"
 let s:p4ContextItemSeparator = ";;;"
 
 aug Perforce | aug END " Define autocommand group.
-call AddToFCShellPre(s:myScriptId . 'FileChangedShell')
+call AddToFCShellPre('P4FileChangedShell')
 
 """ END: One-time initialization of some script variables }}}
 
@@ -787,7 +804,6 @@ function! s:describeHdlr(scriptOrigin, outputType, ...)
   exec "let retVal = s:PFIF(2, a:outputType, 'describe')"
   if s:StartBufSetup() && getline(1) !~# ' - no such changelist'
     call s:SetupFileBrowse()
-    command! -buffer -nargs=0 PItemOpen :call <SID>DescribeFileOpen()
     if MvContainsElement(s:p4CmdOptions, s:SPACE_AS_SEP, '-s', ' ')
       setlocal modifiable
       call append('$', "\t<SHOW DIFFS>")
@@ -922,6 +938,52 @@ function! s:diff2Hdlr(scriptOrigin, outputType, ...)
 
     call s:EndBufSetup()
   endif
+  return retVal
+endfunction
+
+function! s:passwdHdlr(scriptOrigin, outputType, ...)
+  exec MakeArgumentString()
+  if !a:scriptOrigin
+    exec "call s:ParseOptionsIF(1, line('$'), 1, a:outputType, 'passwd', " .
+          \ argumentString . ")"
+  endif
+
+  let oldPasswd = ""
+  if (match(s:p4CmdOptions, '-O\>') == -1)
+    let oldPasswd = input('Enter old password: ')
+    " FIXME: Handle empty passwords.
+    let s:p4CmdOptions = s:p4CmdOptions . ' -O '.oldPasswd
+  endif
+  let newPasswd = ""
+  if (match(s:p4CmdOptions, '-P\>') == -1)
+    while 1
+      let newPasswd = input('Enter new password: ')
+      if (input('Re-enter new password: ') != newPasswd)
+        call s:EchoMessage("Passwords don't match", 'Error')
+      else
+        " FIXME: Handle empty passwords.
+        let s:p4CmdOptions = s:p4CmdOptions . ' -P '.newPasswd
+        break
+      endif
+    endwhile
+  endif
+  exec "let retVal = s:PFIF(2, a:outputType, 'passwd')"
+  return retVal
+endfunction
+
+" Only to avoid confirming for -n and -a options.
+function! s:revertHdlr(scriptOrigin, outputType, ...)
+  exec MakeArgumentString()
+  if !a:scriptOrigin
+    exec "call s:ParseOptionsIF(1, line('$'), 1, a:outputType, 'passwd', " .
+          \ argumentString . ")"
+  endif
+
+  if (match(s:p4CmdOptions, '-n\>') != -1 ||
+        \ match(s:p4CmdOptions, '-a\>') != -1)
+    let s:p4Options = s:p4Options.' ++y'
+  endif
+  exec "let retVal = s:PFIF(2, a:outputType, 'revert')"
   return retVal
 endfunction
 
@@ -1245,6 +1307,8 @@ function! s:VDiffImpl(firstFile, secondFile, preferDepotPaths)
     return s:SyntaxError("diff requires two distinct files as arguments.")
   endif
 
+  let s:vdiffCounter = s:vdiffCounter + 1
+
   if s:IsDepotPath(firstFile)
     let s:p4Command = 'print'
     let s:p4CmdOptions = '-q'
@@ -1262,6 +1326,7 @@ function! s:VDiffImpl(firstFile, secondFile, preferDepotPaths)
     endif
   endif
   diffthis
+  let w:p4VDiffWindow = s:vdiffCounter
   wincmd K
 
   let _splitCommand = s:splitCommand
@@ -1290,6 +1355,7 @@ function! s:VDiffImpl(firstFile, secondFile, preferDepotPaths)
     let &splitright = _splitright
   endtry
   diffthis
+  let w:p4VDiffWindow = s:vdiffCounter
   wincmd _
 endfunction
 
@@ -1372,7 +1438,7 @@ function! s:PFOpenAltFile(mode, ...) " {{{
     exec MakeArgumentString()
   endif
 
-  exec "let altFileNames = s:PFGetAltFiles(" . argumentString . ")"
+  exec "let altFileNames = s:PFGetAltFiles('', " . argumentString . ")"
   if a:mode == 0 || a:mode == 2
     let n = MvNumberOfElements(altFileNames, s:SPACE_AS_SEP, ' ')
     if n == 1
@@ -1506,7 +1572,8 @@ function! s:OpenFile(scriptOrigin, outputType, fileName) " {{{
       if curWin != winnr() && &previewwindow
         wincmd p " Don't use preview window.
       endif
-      if winnr() == curWin
+      " Avoid loosing temporary buffers accidentally.
+      if winnr() == curWin || getbufvar('%', '&bufhidden') != ''
         split
       endif
       if winbufnr(winnr()) != bufNr
@@ -1558,7 +1625,7 @@ function! s:getCommandItemHandler(outputType, command, args) " {{{
 endfunction " }}}
 
 function! s:OpenCurrentItem(outputType) " {{{
-  let curItem = s:GetOpenItem()
+  let curItem = s:GetOpenItem(a:outputType)
   if curItem !~# s:EMPTY_STR
     let commandHandler = s:getCommandItemHandler(a:outputType, b:p4Command,
           \ "'" . curItem . "'")
@@ -1575,8 +1642,10 @@ function! s:GetCurrentItem() " {{{
   return ""
 endfunction " }}}
 
-function! s:GetOpenItem() " {{{
-  if exists("b:p4Command") && exists("s:{b:p4Command}OpenItemExpr")
+function! s:GetOpenItem(outputType) " {{{
+  " For non-preview open.
+  if exists("b:p4Command") && a:outputType == 0 &&
+        \ exists("s:{b:p4Command}OpenItemExpr")
     exec "return " s:{b:p4Command}OpenItemExpr
   endif
   return s:GetCurrentItem()
@@ -1692,7 +1761,7 @@ endfunction " }}}
 
 function! s:SetupFileBrowse() " {{{
   " For now, assume that a new window is created and we are in the new window.
-  exec "setlocal includeexpr=" . s:myScriptId . "ConvertToLocalPath(v:fname)"
+  exec "setlocal includeexpr=P4IncludeExpr(v:fname)"
 
   " No meaning for delete.
   silent! nunmap <buffer> D
@@ -1942,6 +2011,36 @@ function! s:ToggleCheckOutPrompt(interactive)
           \ "disabled.")
   endif
 endfunction
+
+function! s:PFDiffOff(diffCounter)
+  " Cycle through all windows and turn off diff options for the specified diff
+  " run, or all, if none specified.
+  let curWinNr = winnr()
+  let eventignore = &eventignore
+  set eventignore=all
+  try
+    let i = 1
+    while winbufnr(i) != -1
+      try
+        exec i 'wincmd w'
+        if ! exists('w:p4VDiffWindow')
+          continue
+        endif
+
+        if a:diffCounter == -1 || w:p4VDiffWindow == a:diffCounter
+          call CleanDiffOptions()
+          unlet w:p4VDiffWindow
+        endif
+      finally
+        let i = i + 1
+      endtry
+    endwhile
+  finally
+    " Return to the original window.
+    exec curWinNr 'wincmd w'
+    let &eventignore = eventignore
+  endtry
+endfunction
 """ END: Helper functions }}}
 
 
@@ -1979,7 +2078,7 @@ function! s:W(quitWhenDone, commandName, ...)
   if s:errCode == 0
     setl nomodified
     if a:quitWhenDone
-      quit
+      close
     endif
   else
     if search('^Change \d\+ created', 'w')
@@ -2199,13 +2298,16 @@ function! s:PFrangeIF(fline, lline, scriptOrigin, outputType, commandName, ...)
       "   s:PFGetAltFiles() gets invoked, otherwise the call results in a
       "   recursive |sub-replace-special| and corrupts the mappings.
       call s:CondUpdateViewMappings()
+      let unprotectedAmp = MvCrUnProtectedCharsPattern('&')
       " Pattern is a series of non-space chars or protected spaces (filename)
       "   including the revision specifier, if any, followed by the alternative
       "   codeline specifier.
-      let p4Arguments = substitute(p4Arguments,
-            \ '\(\%([^ ]\|\\\@<!\%(\\\\\)*\\ \)\+' .
-            \ '\%([\\]*[#@]\%(-\?\d\+\|\w\+\)\)\?\)\\\@<!\%(\\\\\)*&\(\w\+\)',
-            \ '\=s:PFGetAltFiles(submatch(2), submatch(1))', 'g')
+      while p4Arguments =~# unprotectedAmp
+        let p4Arguments = substitute(p4Arguments,
+              \ '\(\%([^ &]\|\\\@<!\%(\\\\\)*\\[ &]\)\+' .
+              \ '\%([\\]*[#@]\%(-\?\d\+\|\w\+\)\)\?\)\\\@<!\%(\\\\\)*&\(\w\+\)',
+              \ '\=s:PFGetAltFiles("&", submatch(2), submatch(1))', 'g')
+      endwhile
     endif
     let p4Arguments = UnEscape(p4Arguments, '&@')
 
@@ -2493,7 +2595,7 @@ endfunction
 
 "---------------------------------------------------------------------------
 " Produce string for ruler output
-function! s:P4RulerStatus()
+function! P4RulerStatus()
   if exists('b:p4RulerStr') && b:p4RulerStr !~# s:EMPTY_STR
     return b:p4RulerStr
   endif
@@ -2746,7 +2848,7 @@ function! s:CheckOutFile()
   endif
 endfunction
 
-function! s:FileChangedShell()
+function! P4FileChangedShell()
   if s:activeStatusEnabled
     call s:ResetFileStatusForBuffer(expand("<abuf>") + 0)
   endif
@@ -3582,6 +3684,10 @@ function! s:UpdateViewMappings()
   endif
 endfunction
 
+function! P4IncludeExpr(path)
+  return s:ConvertToLocalPath(a:path)
+endfunction
+
 function! s:ConvertToLocalPath(path)
   let fileName = substitute(a:path, '#[^#]\+$', '', '')
   if s:IsDepotPath(fileName)
@@ -3643,7 +3749,7 @@ endfunction
 
 " Requires at least 2 arguments.
 " Returns a list of alternative filenames.
-function! s:PFGetAltFiles(codeline, ...)
+function! s:PFGetAltFiles(protectedChars, codeline, ...)
   if a:0 == 0
     return ""
   endif
@@ -3654,19 +3760,22 @@ function! s:PFGetAltFiles(codeline, ...)
   let altFiles = ""
   while i <= a:0
     let fileName = a:{i}
-    let fileName=CleanupFileName(fileName)
-    if ! s:IsDepotPath(fileName)
-      let fileName = s:ConvertToDepotPath(fileName)
-    endif
+    let fileName=CleanupFileName2(fileName, a:protectedChars)
 
-    if altCodeLine ==# s:p4Depot
-      " We do nothing, it is already converted to depot path.
-      let altFile = fileName
-    else
-      " FIXME: Assumes that the current branch name has single path component.
-      let altFile = substitute(fileName, '//'.s:p4Depot.'/[^/]\+',
-            \ '//'.s:p4Depot.'/' . altCodeLine, "")
-      let altFile = s:ConvertToLocalPath(altFile)
+    if altCodeLine ==# 'local' && s:IsDepotPath(fileName)
+      let fileName = s:ConvertToLocalPath(fileName)
+    elseif ! s:IsDepotPath(fileName)
+      let fileName = s:ConvertToDepotPath(fileName)
+
+      if altCodeLine ==# s:p4Depot
+        " We do nothing, it is already converted to depot path.
+        let altFile = fileName
+      else
+        " FIXME: Assumes that the current branch name has single path component.
+        let altFile = substitute(fileName, '//'.s:p4Depot.'/[^/]\+',
+              \ '//'.s:p4Depot.'/' . altCodeLine, "")
+        let altFile = s:ConvertToLocalPath(altFile)
+      endif
     endif
     let altFiles = MvAddElement(altFiles, ' ', escape(altFile, ' '))
     let i = i + 1
@@ -3828,7 +3937,7 @@ function! s:GotoWindow(clearBuffer, p4OrgFileName, cmdCompleted)
     "   this case, rather than making a mistake.
     if NumberOfWindows() > nWindows
       if winbufnr(winnr()) == curBufnr " Error creating buffer itself.
-        quit
+        close
       elseif bufname('%') == s:p4WinName
         " This should even close the window.
         silent! exec "bwipeout " . bufnr('%')
@@ -3923,7 +4032,7 @@ function! s:MakeWindowName()
     " Some characters are not allowed in a filename on windows so substitute
     " them with something else.
     let winName = substitute(winName, s:specialChars,
-          \ '\="[" . s:specialChars{submatch(1)} . "]"', 'g')
+          \ '\="[" . (v:version < 700 ? s:specialCharsMap{submatch(1)} : s:specialCharsMap[submatch(1)]) . "]"', 'g')
     "let winName = substitute(winName, s:specialChars, '\\\1', 'g')
   endif
   " Finally escape some characters again.

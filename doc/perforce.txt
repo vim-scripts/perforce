@@ -920,18 +920,21 @@ read the output of p4 command.
 
                                             *:PEdit*      *:PRevert*   *:PAdd*
                                             *:PDiff*      *:PDiff2*    *:PPrint*
-                                            *:PGet*       *:PSync*     *:POpened*
-                                            *:PHelp*      *:PDelete*
-                                            *:PLock*      *:PSubmit*   *:PUnlock*
+                                            *:PGet*       *:PSync*
+                                            *:POpened*    *:PHelp*
+                                            *:PDelete*    *:PLock*
+                                            *:PSubmit*    *:PUnlock*
                                             *:PClient*    *:PClients*  *:PUser*
-                                            *:PUsers*     *:PBranch*   *:PBranches*
-                                            *:PLabel*     *:PLabels*
-                                            *:PJob*       *:PJobs*     *:PJobspec*
-                                            *:PResolve*   *:PChange*   *:PChanges*
+                                            *:PUsers*     *:PBranch*
+                                            *:PBranches*  *:PLabel*
+                                            *:PLabels*    *:PJob*      *:PJobs*
+                                            *:PJobspec*   *:PResolve*
+                                            *:PChange*    *:PChanges*
                                             *:PDepot*     *:PDepots*   *:PHave*
                                             *:PDescribe*  *:PFiles*    *:PFstat*
                                             *:PGroup*     *:PGroups*
                                             *:PLabelsync* *:PIntegrate*
+                                            *:PPasswd*
 
 While the perforce commands can be executed using the "PF xxx" syntax, some
 of them have an equivalent PXxx command. So the following two: >
@@ -1162,11 +1165,21 @@ called 'other', then the following syntax makes it easy >
         :PD2 \#head&other \#2 " Same as 'PD2 \#1 \#2' if 'other' is the parent
                               "   codeline and if they are in sync.
 <
+You can pass multiple such modifiers too, though the main use is with the
+depot-modifier as described below.
+
                                             *perforce-depot-modifier*
-The '&depot' modifier is treated specially. Instead of treating 'depot' as an
-alternative codeline, the filename is converted to its corresponding depot
-name. This is useful if the local file is not part of your client spec or is
-deleted from the depot. See also |perforce-edit-alternative-file|
+The '&depot' modifier is treated specially. Instead of treating 'depot' (or the
+name of the current depot) as an alternative codeline, the filename is converted
+to its corresponding depot name. This is useful if the local file is not part of
+your client spec or is deleted from the depot. See also
+|perforce-edit-alternative-file| >
+        :PF filelog a-deleted-file&other&depot
+<
+
+                                            *perforce-local-modifier*
+The '&local' modifier is treated specially. Instead of treating 'local' as an
+alternative codeline, the filename is converted to its corresponding local name.
 
 ==============================================================================
 
@@ -1257,7 +1270,6 @@ The equivalent menu entries are "Save Current Spec" and "Save and Quit Current
 Spec".
 
                                             *perforce-changelist*
-                                            *:PChange*
 The change command accepts a set of perforce filename patterns that are
 passed directly to "opened" to filter the files that should be included in the
 changelist. Without specifying the patterns, the command would work exactly the
@@ -1501,11 +1513,17 @@ file.
                               " different branch.
         :PVDiff2 \#1 \#2 " Diff the revisions 1 and 2 for the current file.
 <
+                                            *PFDiffOff*
 These commands always open new windows split vertically side-by-side to start
 diff settings (diff settings are local to windows), so that your existing
 windows are not disturbed. When you are done viewing the diff, you can just
 close the diff windows and be done. But in case you need to reset the diff
-settings, there is a command called "PFDiffOff" provided for convenience.
+settings, there is a command called "PFDiffOff" provided for convenience. The
+command is very flexible in the sense that, it can identify the diff windows
+that belong to one diff operation and when run from one of them, can turn off
+the diff settings on all the related windows.  This is useful to incrementally
+add/remove diff windows using PVDiff and PVDiff2 commands. If run outside of any
+perforce diff windows, it turns off diff for all perforce windows.
 
                                             *perforce-default-diff-format*
 Pass the dummy option "-d" (with no diff flags) to perforce commands that
@@ -1878,7 +1896,15 @@ perforce/perforcebugrep.vim for examples.
 
 - Do you know that :PFDiffLink and :PFDiffPLink commands can be used on regular
   "diff" command output too?
-  
+
+- To quickly search for change descriptions, you can print the list of changes
+  matching a given restriction, with their descriptions and use Vim to search
+  for the pattern. You can then describe the change for more information. Ex: >
+
+    :PChanges -l //depot/branch/src/server/...
+    /socket
+<
+
 ==============================================================================
 
                                             *perforce-limitations*
@@ -1959,6 +1985,20 @@ perforce/perforcebugrep.vim for examples.
 These are just a summary of the changes done in the current and previous
 versions. Though I have done a good attempt to list all, I could have very well
 missed some changes.
+
+                                            *perforce-changes-3.2*
+    - Fixed PVDiff to work with two filenames. The problem was only with PVDiff
+      command, as "PF vdiff" worked fine.
+    - PFDiffOff command is a lot more flexible now, see |PFDiffOff|.
+    - New command PPasswd for changing passwords.
+    - Don't confirm revert if -a or -n option is passed.
+    - Avoid accidentally loosing existing buffers while opening new ones from
+      diff and other windows.
+    - Recognize additional p4 commands as valid.
+    - You can now pass multiple codeline modifiers, see
+      |perforce-alternative-codeline-modifier|.
+    - Misc. tuneups for peforce diff hyperlinking feature.
+    - Misc. bugfixes in the menu.
 
                                             *perforce-changes-3.1*
 
@@ -2118,7 +2158,7 @@ missed some changes.
     - Added vdiff and vdiff2 commands. Added p4UseVimDiff
       option. See |perforce-vim-diff|.
     - Added PFileChange command for the filelist window.
-    - You can now pass "+y" option to revert to skip the prompt.
+    - You can now pass "++y" option to revert to skip the prompt.
     - New command |PFSettings| to interactively change the settings of a
       session.
     - The script now has a more robust and compact architecture, which actually
@@ -2231,8 +2271,7 @@ order:
       buffer list.
     - There should be an option to show/hide deleted files in the filelists
       (PFiles).
-    - A command to change password using the "passwd" command (use inputsecret()
-      function).
+    - The PPasswd can't be used when either the old or new password is empty.
     - There should be an option to have a single perforce-log window where all
       the output gets appended, instead of opening new windows for each command.
     - We should be able to pass file patterns to be used as the View while
@@ -2298,11 +2337,14 @@ Please send your reports to hari_vim at yahoo dot com.
   'q' key to quit non-editable perforce windows, and reporting various bugs.
 - Mark Brophy (mbrophy at esmertec dot com) for his ideas with using P4CONFIG
   and others that allow dynamic configuration.
-- Various others for reporting bugs, ideas and feedback. Some of them are:
+- Various others for sending bugs, patches, ideas and feedback. Some of them
+  are:
     - Denis Perelyubskiy (denisp at CS dot UCLA dot EDU)
     - Kevin McCarthy (tunacat at yahoo dot com)
     - Paul Wright (paul at noctua dot org dot uk)
     - Reva Revadigar (reva dot revadigar at autodesk dot com)
     - Peter Hutkins (PHUTKINS at altera dot com)
+    - Brett Humphreys (bretth at aiinet dot com)
+    - Craig Emery (craig dot emery at ntlworld dot com)
 
  vim6:tw=80:ts=8:ft=help:ai:sw=4:et

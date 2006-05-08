@@ -7,6 +7,9 @@
 " Licence: This program is free software; you can redistribute it and/or
 "          modify it under the terms of the GNU General Public License.
 "          See http://www.gnu.org/copyleft/gpl.txt 
+" NOTE:
+"   - This may not work well if there are multiple diff formats are mixed in
+"     the same file.
 
 " Make sure line-continuations won't cause any problem. This will be restored
 "   at the end
@@ -44,6 +47,9 @@ function! s:DiffOpenSrc(preview) " {{{
     PItemOpen
   endif
   call SaveHardPosition('DiffOpenSrc')
+  " Move to the end of next line (if possible), so that the search will work
+  " correctly when the cursor is ON the header (should find the current line).
+  normal $
   let filePat = '\zs[^#]\+\%(#\d\+\)\=\ze\%( ([^)]\+)\)\='
   let diffHdr = '^diff \%(-\S\+\s\+\)*'
   " Search backwards to find the header for this diff (could contain two
@@ -82,7 +88,7 @@ function! s:DiffOpenSrc(preview) " {{{
     endif
 
     " Search for the start of the diff segment. We could be in default,
-    " context or unified mode.
+    " context or unified mode. Determine context, stLine and offset.
     if search('^\d\+\%(,\d\+\)\=[adc]\d\+\%(,\d\+\)\=$', 'bW') " default.
       let segStLine = line('.')
       let segHeader = getline('.')
@@ -136,62 +142,71 @@ function! s:DiffOpenSrc(preview) " {{{
       finally
         let &l:modifiable = _ma
       endtry
+    else " Not inside a diff context, just use 1.
+      let context = 'local'
+      let stLine = 1
+      let offset = 0
     endif
 
-    if context ==# 'depot' && firstFile =~# s:EMPTY_STR
-      " Assume previous revision as the "before" file if none specified.
-      if PFCall('s:IsDepotPath', secondFile) && secondFile =~# '#\d\+'
-        let depotRev = s:GetFileRevision(secondFile)
-        if depotRev == ''
+    try
+      if context ==# 'depot' && firstFile =~# s:EMPTY_STR
+        " Assume previous revision as the "before" file if none specified.
+        if PFCall('s:IsDepotPath', secondFile) && secondFile =~# '#\d\+'
+          let depotRev = s:GetFileRevision(secondFile)
+          if depotRev == ''
+            return
+          endif
+          let firstFile = substitute(secondFile, '#\d\+', '', '').'#'.(depotRev-1)
+        else
           return
         endif
-        let firstFile = substitute(secondFile, '#\d\+', '', '').'#'.(depotRev-1)
+      endif
+      if context ==# 'local'
+        let file = secondFile
       else
-        return
+        let file = firstFile
       endif
-    endif
-    if context ==# 'local'
-      let file = secondFile
-    else
-      let file = firstFile
-    endif
-    " If the path refers to a depot file, check if the local file is currently
-    " open in Vim and if so has the same version number as the depot file.
-    if context ==# 'local' && PFCall('s:IsDepotPath', file)
-      let localFile = PFCall('s:ConvertToLocalPath', file)
-      let bufNr = bufnr(localFile) + 0
-      if bufNr != -1
-        let haveRev = getbufvar(bufNr, 'p4HaveRev')
-        let depotRev = s:GetFileRevision(file)
-        if haveRev == depotRev
-          let file = localFile
+      " If the path refers to a depot file, check if the local file is currently
+      " open in Vim and if so has the same version number as the depot file.
+      if context ==# 'local' && PFCall('s:IsDepotPath', file)
+        let localFile = PFCall('s:ConvertToLocalPath', file)
+        let bufNr = bufnr(localFile) + 0
+        if bufNr != -1
+          let haveRev = getbufvar(bufNr, 'p4HaveRev')
+          let depotRev = s:GetFileRevision(file)
+          if haveRev == depotRev
+            let file = localFile
+          endif
+          " else " We could also try to run 'fstat' command and open up the file.
         endif
-      " else " We could also try to run 'fstat' command and open up the file.
       endif
-    endif
-    if PFCall('s:IsDepotPath', file)
-      let refresh = PFGet('s:refreshWindowsAlways')
-      try
-        call PFSet('s:refreshWindowsAlways', 0)
-        call PFCall('s:printHdlr', 0, a:preview, file)
-      finally
-        call PFSet('s:refreshWindowsAlways', refresh)
-      endtry
-      let offset = offset + 1 " For print header.
-    else
-      call PFCall('s:OpenFile', 1, a:preview, CleanupFileName(file))
-    endif
-    if PFEval('s:errCode') == 0
-      if a:preview
-        wincmd P
+      if PFCall('s:IsDepotPath', file)
+        let refresh = PFGet('s:refreshWindowsAlways')
+        try
+          call PFSet('s:refreshWindowsAlways', 0)
+          call PFCall('s:printHdlr', 0, a:preview, file)
+        finally
+          call PFSet('s:refreshWindowsAlways', refresh)
+        endtry
+        let offset = offset + 1 " For print header.
+      else
+        call PFCall('s:OpenFile', 1, a:preview, CleanupFileName(file))
       endif
-      exec (stLine + offset)
-      if a:preview
-        " Also works as a work-around for the buffer not getting scrolled.
-        normal! z.
-        wincmd p
+      if PFEval('s:errCode') == 0
+        if a:preview
+          wincmd P
+        endif
+        mark '
+        exec (stLine + offset)
+        if a:preview
+          " Also works as a work-around for the buffer not getting scrolled.
+          normal! z.
+          wincmd p
+        endif
       endif
-    endif
+    catch
+      call PFCall('s:EchoMessage', v:exception, 'Error')
+    endtry
   endif
 endfunction " }}}
 

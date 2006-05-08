@@ -1,9 +1,9 @@
 " Perforce spec filetype plugin file
 " Language:	  Perforce Spec File
 " Maintainer:	  Hari Krishna Dara <hari_vim at yahoo dot com>
-" Last Change:	  16-May-2003 @ 10:16
+" Last Change:	  13-Jan-2006 @ 17:38
 " Since Version:  1.4
-" Revision:	  1.0.5
+" Revision:	  1.0.6
 " Plugin Version: 2.1
 " Download From:
 "     http://vim.sourceforge.net/scripts/script.php?script_id=240
@@ -35,7 +35,7 @@ let s:patterns{'Branch'}   = '\%(^View:\s*\_s\?\s*\)\zs\S\|^View:'
 let s:patterns{'Label'}    = '\%(^View:\s*\_s\?\s*\)\zs\S\|^View:'
 let s:patterns{'Client'}   = '\%(^View:\s*\_s\?\s*\)\zs\S\|^View:'
 let s:patterns{'Job'}      = '\%(^Job:\s\+\)\@<=new\>\|\%(^Description:\s*\_s\?\s*\)\zs\S\|^Description:'
-let s:patterns{'Job Spec'} = '^Fields:'
+let s:patterns{'Job_Spec'} = '^Fields:'
 let s:patterns{'User'}     = '^User:'
 let s:patterns{'Depot'}    = '\%(^Description:\s*\_s\?\s*\)\zs\S\|^Description:'
 let s:patterns{'Group'}    = '\%(^Users:\s*\_s\?\s*\)\zs\S\|^Users:'
@@ -44,7 +44,8 @@ let s:patterns{'Group'}    = '\%(^Users:\s*\_s\?\s*\)\zs\S\|^Users:'
 function! s:PositionLine()
   let specPattern = '^# A Perforce \(.*\) Specification.$'
   if getline(1) =~ specPattern
-    let spec = substitute(getline(1), specPattern, '\1', '')
+    let spec = substitute(substitute(getline(1), specPattern, '\1', ''), ' ',
+	  \ '_', 'g')
     if spec != "" && exists('s:patterns'. spec) &&
 	  \ search(s:patterns{spec}, 'w') != 0
       let b:p4Pattern = s:patterns{spec}
