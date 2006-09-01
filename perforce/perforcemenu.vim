@@ -1,9 +1,9 @@
 " perforcemenu.vim: Create a menu for perforce plugin.
 " Author: Hari Krishna (hari_vim at yahoo dot com)
-" Last Change: 15-Mar-2005 @ 14:20
+" Last Change: 28-Aug-2006 @ 22:50
 " Created:     07-Nov-2003
-" Requires:    Vim-6.2, perforce.vim(3.0), multvals.vim(3.3)
-" Version:     1.2.0
+" Requires:    Vim-6.2, perforce.vim(4.0)
+" Version:     2.1.0
 " Licence: This program is free software; you can redistribute it and/or
 "          modify it under the terms of the GNU General Public License.
 "          See http://www.gnu.org/copyleft/gpl.txt 
@@ -11,15 +11,8 @@
 if !exists("loaded_perforce")
   runtime plugin/perforce.vim
 endif
-if !exists("loaded_perforce") || loaded_perforce < 300
+if !exists("loaded_perforce") || loaded_perforce < 400
   echomsg "perforcemenu: You need a newer version of perforce.vim plugin"
-  finish
-endif
-if !exists("loaded_multvals")
-  runtime plugin/multvals.vim
-endif
-if !exists("loaded_multvals") || loaded_multvals < 303
-  echomsg "perforcemenu: You need a newer version of multvals.vim plugin"
   finish
 endif
 
@@ -29,22 +22,30 @@ let s:save_cpo = &cpo
 set cpo&vim
 
 function! s:Get(setting, ...)
-  let val = PFCall('s:GetSettingValue', a:setting)
-  if val == '' && a:0 > 0
-    let val = a:1
+  if exists('g:p4'.a:setting)
+    return g:p4{a:setting}
   endif
-  return val
+
+  if exists('*perforce#PFCall')
+    let val = perforce#PFCall('s:_', a:setting)
+    if val == '' && a:0 > 0
+      let val = a:1
+    endif
+    return val
+  endif
+  return 0
 endfunction
 
 function! s:PFExecCmd(cmd) " {{{
   if exists(':'.a:cmd) == 2
     exec a:cmd
   else
-    call PFCall("s:EchoMessage", 'The command: ' . a:cmd .
+    call perforce#PFCall("s:EchoMessage", 'The command: ' . a:cmd .
 	  \ ' is not defined for this buffer.', 'WarningMsg')
   endif
 endfunction
 command! -nargs=1 PFExecCmd :call <SID>PFExecCmd(<q-args>) " }}}
+let s:loaded_perforcemenu = 1
 
 " CreateMenu {{{
 if s:Get('EnableMenu') || s:Get('EnablePopupMenu') " [-2f]
@@ -121,15 +122,13 @@ function! s:CreateMenu(sub, expanded)
   if a:expanded
     exec 'amenu <silent> ' . a:sub . '&Perforce.&Settings.' .
           \ '&Switch\ Port\ Client\ User '.
-          \ ':call PFCall("s:SwitchPortClientUser")<CR>'
-    let p4Presets = PFGet('s:p4Presets')
-    let nSets = MvNumberOfElements(p4Presets, ',')
-    if nSets > 0
+          \ ':call perforce#PFCall("s:SwitchPortClientUser")<CR>'
+    let p4Presets = split(perforce#PFGet('s:p4Presets'), ',')
+    if len(p4Presets) > 0
       let index = 0
-      while index < nSets
-        let nextSet = MvElementAt(p4Presets, ',', index)
-        exec 'amenu <silent> ' . a:sub . '&Perforce.&Settings.&' . index . '\ '
-              \ . escape(nextSet, ' .') . ' :PFSwitch ' . index . '<CR>'
+      while index < len(p4Presets)
+        exec 'amenu <silent>' a:sub.'&Perforce.&Settings.&'.index.'\ '
+              \ .escape(p4Presets[index], ' .') ':PFSwitch' index.'<CR>'
         let index = index + 1
       endwhile
     endif
@@ -209,7 +208,7 @@ function! s:CreateMenu(sub, expanded)
     exec 'amenu <silent> ' . a:sub . '&Perforce.Cl&ient.-Sep- :'
     exec 'amenu <silent> ' . a:sub . '&Perforce.Cl&ient.&Switch\ to\ Current' .
           \ '\ Client :exec "PFSwitch ' . s:Get('Port') .
-          \ ' " . PFCall("s:GetCurrentItem")<CR>'
+          \ ' " . perforce#PFCall("s:GetCurrentItem")<CR>'
     exec 'amenu <silent> ' . a:sub .
           \ '&Perforce.Cl&ient.&View\ ClientSpecs :PClients<CR>'
   endif
@@ -231,7 +230,7 @@ function! s:CreateMenu(sub, expanded)
     exec 'amenu <silent> ' . a:sub . '&Perforce.&User.-Sep- :'
     exec 'amenu <silent> ' . a:sub . '&Perforce.&User.&Switch\ to\ Current' .
           \ '\ User :exec "PFSwitch ' . s:Get('Port') . ' ' .
-	  \ s:Get('Client') . ' " . PFCall("s:GetCurrentItem")<CR>'
+	  \ s:Get('Client') . ' " . perforce#PFCall("s:GetCurrentItem")<CR>'
     exec 'amenu <silent> ' . a:sub .
           \ '&Perforce.&User.&View\ Users :PUsers<CR>'
   endif

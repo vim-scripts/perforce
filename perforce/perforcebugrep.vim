@@ -1,9 +1,9 @@
 " perforcebugrep.vim: Generate perforcebugrep.txt for perforce plugin.
 " Author: Hari Krishna (hari_vim at yahoo dot com)
-" Last Change: 11-Dec-2003 @ 19:34
+" Last Change: 29-Aug-2006 @ 17:57
 " Created:     07-Nov-2003
-" Requires:    Vim-6.2, perforce.vim(3.0), multvals.vim(3.4)
-" Version:     1.0.2
+" Requires:    Vim-7.0, perforce.vim(4.0)
+" Version:     2.1.0
 " Licence: This program is free software; you can redistribute it and/or
 "          modify it under the terms of the GNU General Public License.
 "          See http://www.gnu.org/copyleft/gpl.txt 
@@ -11,15 +11,8 @@
 if !exists("loaded_perforce")
   runtime plugin/perforce.vim
 endif
-if !exists("loaded_perforce") || loaded_perforce != 300
+if !exists("loaded_perforce") || loaded_perforce < 400
   echomsg "perforcebugrep: You need a newer version of perforce.vim plugin"
-  finish
-endif
-if !exists("loaded_multvals")
-  runtime plugin/multvals.vim
-endif
-if !exists("loaded_multvals") || loaded_multvals < 304
-  echomsg "perforcebugrep: You need a newer version of multvals.vim plugin"
   finish
 endif
 
@@ -31,6 +24,8 @@ set cpo&vim
 " Based on $VIM/bugreport.vim
 let _more = &more
 try
+  PFInitialize " Make sure it is autoloaded.
+
   set nomore
   call delete('perforcebugrep.txt')
   if has("unix")
@@ -42,34 +37,24 @@ try
   version
 
   echo "Perforce plugin version: " . loaded_perforce
-  echo "Multvals plugin version: " . loaded_multvals
   echo "Genutils plugin version: " . loaded_genutils
 
   echo "--- Perforce Plugin Settings ---"
-  call MvIterCreate(PFGet('s:settings'), ',', 'PFDumpSettings')
-  while MvIterHasNext('PFDumpSettings')
-    let nextSetting = MvIterNext('PFDumpSettings')
-    let value = PFCall('s:GetSettingValue', nextSetting)
+  for nextSetting in perforce#PFGet('s:settings')
+    let value = perforce#PFCall('s:_', nextSetting)
     echo nextSetting.': '.value
-  endwhile
-  call MvIterDestroy('PFDumpSettings')
-  echo "s:p4Contexts: " . PFGet('s:p4Contexts')
-  echo "s:p4Depot: " . PFGet('s:p4Depot')
-  echo "s:defaultOptions: " . PFGet('s:defaultOptions')
-  echo "s:ignoreDefPattern: " . PFGet('s:ignoreDefPattern')
-  echo "s:ignoreUsrPattern: " . PFGet('s:ignoreUsrPattern')
-  echo "s:p4HideOnBufHidden: " . PFGet('s:p4HideOnBufHidden')
-  echo "s:curClientExpr: " . PFGet('s:curClientExpr')
-  echo "s:curUserExpr: " . PFGet('s:curUserExpr')
-  echo "s:curPortExpr: " . PFGet('s:curPortExpr')
-  echo "s:curPasswdExpr: " . PFGet('s:curPasswdExpr')
-  echo "s:curDirExpr: " . PFGet('s:curDirExpr')
-  echo "s:curPreset: " . PFGet('s:curPreset')
+  endfor
+  echo "s:p4Contexts: " . string(perforce#PFCall('s:_', 'Contexts'))
+  echo "g:p4CurDirExpr: " . perforce#PFCall('s:_', 'CurDirExpr')
+  echo "g:p4CurPresetExpr: " . perforce#PFCall('s:_', 'CurPresetExpr')
+  echo "s:p4Client: " . perforce#PFCall('s:_', 'Client')
+  echo "s:p4User: " . perforce#PFCall('s:_', 'User')
+  echo "s:p4Port: " . perforce#PFCall('s:_', 'Port')
 
   echo "--- Current Buffer ---"
   echo "Current buffer: " . expand('%')
   echo "Current directory: " . getcwd()
-  let tempDir = PFGet('s:tempDir')
+  let tempDir = perforce#PFCall('s:_', 'TempDir')
   if isdirectory(tempDir)
     echo 'temp directory "' . tempDir . '" exists'
   else
@@ -92,8 +77,11 @@ try
   endif
   setlocal
 
-  echo "--- Perforce Settings ---"
-  echo PFCall('s:PFIF', '1', '4', 'info')
+  echo "--- p4 info ---"
+  let info = perforce#PFCall('perforce#PFIF', '1', '4', 'info')
+  " The above resets redir.
+  redir >>perforcebugrep.txt
+  echo info
 
   set all
 finally
