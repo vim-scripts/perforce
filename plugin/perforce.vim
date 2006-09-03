@@ -1,9 +1,9 @@
 " perforce.vim: Interface with perforce SCM through p4.
 " Author: Hari Krishna (hari_vim at yahoo dot com)
-" Last Change: 30-Aug-2006 @ 18:23
+" Last Change: 02-Sep-2006 @ 19:56
 " Created:     Sometime before 20-Apr-2001
-" Requires:    Vim-7.0, genutils.vim(2.2)
-" Version:     4.0.4
+" Requires:    Vim-7.0, genutils.vim(2.3)
+" Version:     4.1.3
 " Licence: This program is free software; you can redistribute it and/or
 "          modify it under the terms of the GNU General Public License.
 "          See http://www.gnu.org/copyleft/gpl.txt 
@@ -134,7 +134,7 @@ endif
 if !exists('loaded_genutils')
   runtime plugin/genutils.vim
 endif
-if !exists('loaded_genutils') || loaded_genutils < 202
+if !exists('loaded_genutils') || loaded_genutils < 203
   echomsg 'perforce: You need a newer version of genutils.vim plugin'
   finish
 endif
@@ -210,31 +210,31 @@ command! -nargs=* -complete=custom,perforce#PFComplete PDiff
 command! -nargs=* -complete=custom,perforce#PFComplete PD
       \ :PDiff <args>
 command! -nargs=* -complete=custom,perforce#PFComplete PEdit
-      \ :call perforce#PFIF(0, -2, 'edit', <f-args>)
+      \ :call perforce#PFIF(0, 2, 'edit', <f-args>)
 command! -nargs=* -complete=custom,perforce#PFComplete PE
       \ :PEdit <args>
 command! -nargs=* -complete=custom,perforce#PFComplete PReopen
-      \ :call perforce#PFIF(0, -2, 'reopen', <f-args>)
+      \ :call perforce#PFIF(0, 2, 'reopen', <f-args>)
 command! -nargs=* -complete=custom,perforce#PFComplete PAdd
-      \ :call perforce#PFIF(0, -2, 'add', <f-args>)
+      \ :call perforce#PFIF(0, 2, 'add', <f-args>)
 command! -nargs=* -complete=custom,perforce#PFComplete PA
       \ :PAdd <args>
 command! -nargs=* -complete=custom,perforce#PFComplete PDelete
-      \ :call perforce#PFIF(0, -2, 'delete', <f-args>)
+      \ :call perforce#PFIF(0, 2, 'delete', <f-args>)
 command! -nargs=* -complete=custom,perforce#PFComplete PLock
-      \ :call perforce#PFIF(0, -2, 'lock', <f-args>)
+      \ :call perforce#PFIF(0, 2, 'lock', <f-args>)
 command! -nargs=* -complete=custom,perforce#PFComplete PUnlock
-      \ :call perforce#PFIF(0, -2, 'unlock', <f-args>)
+      \ :call perforce#PFIF(0, 2, 'unlock', <f-args>)
 command! -nargs=* -complete=custom,perforce#PFComplete PRevert
-      \ :call perforce#PFIF(0, -2, 'revert', <f-args>)
+      \ :call perforce#PFIF(0, 2, 'revert', <f-args>)
 command! -nargs=* -complete=custom,perforce#PFComplete PR
       \ :PRevert <args>
 command! -nargs=* -complete=custom,perforce#PFComplete PSync
-      \ :call perforce#PFIF(0, -2, 'sync', <f-args>)
+      \ :call perforce#PFIF(0, 2, 'sync', <f-args>)
 command! -nargs=* -complete=custom,perforce#PFComplete PG
       \ :PSync <args>
 command! -nargs=* -complete=custom,perforce#PFComplete PGet
-      \ :call perforce#PFIF(0, -2, 'get', <f-args>)
+      \ :call perforce#PFIF(0, 2, 'get', <f-args>)
 command! -nargs=* -complete=custom,perforce#PFComplete POpened
       \ :call perforce#PFIF(0, 0, 'opened', <f-args>)
 command! -nargs=* -complete=custom,perforce#PFComplete PO
@@ -339,7 +339,7 @@ command! -nargs=0 PFDiffOff :call perforce#PFDiffOff(
 command! -nargs=? PFWipeoutBufs :call perforce#WipeoutP4Buffers(<f-args>)
 "command! -nargs=* -complete=file -range=% PF
 command! -nargs=* -complete=custom,perforce#PFComplete -range=% PF
-      \ :call perforce#PFrangeIF(<line1>, <line2>, 0, -2, <f-args>)
+      \ :call perforce#PFrangeIF(<line1>, <line2>, 0, 0, <f-args>)
 command! -nargs=* -complete=file PFRaw :call perforce#PFRaw(<f-args>)
 command! -nargs=* -complete=custom,perforce#PFComplete -range=% PW
       \ :call perforce#PW(<line1>, <line2>, 0, <f-args>)

@@ -1,9 +1,9 @@
 *perforce.txt*  A feature Rich Perforce SCM Integration for Vim.
                     Requires Vim 6.0
-            Last Change: 22-Oct-2004 @ 10:20
+            Last Change: 01-Sep-2006 @ 16:54
           Since Version: 1.4
                Revision: 1.3.0
-         Plugin Version: 4.0
+         Plugin Version: 4.1
                  Author: Hari Krishna Dara (hari_vim at yahoo dot com)
 
                                             *perforce-introduction*
@@ -2021,6 +2021,39 @@ These are just a summary of the changes done in the current and previous
 versions. Though I have done a good attempt to list all, I could have very well
 missed some changes.
 
+                                            *perforce-changes-4.1*
+    - Fixed broken handling of <SHOW DIFF> in describe windows. But it is better
+      than before, as you can now describe multiple changelists and show diffs
+      selectively.
+    - For newer perforce servers, <Enter> on a pending change (in changelist)
+      showed the file list twice. Removed special handling for this, which means
+      for older perforce servers, you will see no file list.
+    - Force a file status update on auto checkout.
+    - File status handling has in general been improved.
+        - Now executing command on multiple files that result in changing the
+          file statuses (such as add, edit, revert etc.) will correctly result
+          in their file statuses getting reset.
+        - While create a new changelist or submitting a change, the Files:
+          section is examined and the file statuses for all of them will be
+          reset. This also works for most of the cases of modifying a changelist
+          to remove/add files.
+        - This will also solve a long standing issue that reload during submit
+          doesn't update its file status.
+    - All windows are getting navigatation commands mapped (like in help window)
+    - Workaround for one of the E788 errors (originating from the plugin) during
+      the auto-checkout. This part of the code has been cleaned up and
+      simplified. During the auto-checkout, if there are other users editing the
+      same file, it now results in the plugin echoing the output as a
+      |WarningMsg|. If you missed to read the output (because you pressed
+      <Enter> in advance), you can see it again using the |PFLastMessage|
+      command. The other E788 originating from Vim code can't be
+      fixed/workedaround, it has to be fixed by Bram.
+    - Fixed broken submit from changelist.
+    - When you create changelists, you can now safely undo to make any further
+      changes, and save them. This also works for submissions (to edit
+      description only), though you may have to remove the Files section before
+      saving the change description.
+
                                             *perforce-changes-4.0*
     - Using Vim7 features, so it is no longer backwards compatible with older
       Vim releases. All the logic using multvals has been changed to take
@@ -2273,33 +2306,25 @@ missed some changes.
 Not in any particular order:
     - PChangesDescribeCurrentItem doesn't work for pending changelists from
       other clients.
-    - The add command doesn't refresh the file status in the ruler.
     - A deleted file is showing up as unopened.
     - Consider #none also as revision in the syntax highlighting.
     - I don't think the p4Depot setting is being handled correctly. We need to
       investigate how depots created using "p4 depot" are used.
     - There is a Syntax highlighting for: "<file>#1 - added as <file>". How is
       this message generated?
-    - Reload during submit doesn't update the file status. This is due to some
-      issue with generating FileChangedShell events during a BufWriteEvent. Bram
-      might provide an alternative event for FileChangedShell which should
-      be useful to fix this problem.
     - When you open a spec window with perforce wildcard patterns as arguments
       (such as "P4 submit .../*") saving works as long as you don't change the
       current working directory of Vim after creating the spec window, otherwise
       because of some weird behavior in Vim, you get an E212.
-    - For newer perforce servers, <Enter> on a pending change (in changelist)
-      showed the file list twice. This is because Perforce fixed the behavior
-      of "describe" such that it will print the files even for pending change
-      lists. This essentially makes the plugin's workaround unnecessary. This
-      probably should be done conditional to the server version?
     - You can't login using the plugin.
     - <pfitem> should be handled at a higher level for it to be more useful.
-    - During the auto-checkout, Vim might give an error if the ftplugin uses
+    - During the auto-checkout, Vim will give error E788 if the ftplugin uses
       :compiler command. This is a known issue with Vim7.0 release, and might
       get fixed in a future patch.
     - When PFSwitch fails because the perforce server is not up, you are forced
       to switch to another setting and come back to it to select it again.
+    - When reverting files from files view, if you select No for the prompt, it
+      still refreshes the window.
 
                                             *perforce-wishlist*
 Here is a list of changes that I think will be useful to do, in no particular
@@ -2342,12 +2367,9 @@ order:
       creating a new label command.
     - We should have a feature to diff2 in labels and changes views when started
       with a filename as an argument. Also diff from changes view.
-    - We should have an option to refresh the list windows after doing some
-      operations (such as revert from filelist window).
+    - A command to refresh only the files that are in a label. Works well for
+      lables containing only a partial list of files.
     - Supporting backquotes could be useful when the shell is unixy.
-    - A command to disable/enable wiping out the current buffer automatically.
-    - Describe can take multiple change nos. <SHOW DETAILS> will not work
-      properly in this case.
     - In list views (and filelog view), we should be able to map the mouse
       presses such a way that single mouse click results in selecting the entire
       line and mouse drag automatically selects the entire line. We will then
@@ -2363,12 +2385,8 @@ order:
       preserve the spec buffers?
     - Executing "admin" command shouldn't open up a new window.
     - Better support for "monitor" command.
-    - clientRoot can be "null" to indicate that the files can be across
-      drives (on windows).
     - There should be an option to position the current line in the diff (if
       exists) (like view current line in the diff).
-    - We should be able to use the dirs command to navigate the depot. It should
-      be possible to create this as a new module.
     - While viewing a directory, it will be nice if the file completion
       happens relative to the directory that is being viewed, rather than the
       working directory of Vim. We probably should have an option to turn it
@@ -2379,8 +2397,6 @@ order:
       information is for some reason not available.
     - While doing custom expansion for files (:PF command), the spaces in the
       filenames should be escaped.
-    - Custom filename completion is not ignoring the file case, even if
-      ignorecase is set.
     - For diff hyper linking, there should be a way to always open the depot
       file (even for the context lines).
     - In DiffLink, detect the column position also. Also add a way to jump the

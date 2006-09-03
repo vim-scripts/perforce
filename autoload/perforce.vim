@@ -141,10 +141,9 @@ let s:navigateCmds = ['help']
 let s:limitListCmds = split('filelog,jobs,changes,', ',')
 " These commands take the diff option -dx.
 let s:diffCmds = split('describe,diff,diff2,', ',')
-" For the following commands, we should limit the output lines in the dialog
-"   to g:p4MaxLinesInDialog. If it exceeds, we should switch to showing a
-"   dialog.
-let s:limitLinesInDlgCmds =
+" The following commands prefer dialog output. If the output exceeds
+"   g:p4MaxLinesInDialog, we should switch to showing the output in a window.
+let s:dlgOutputCmds =
       \ split('add,delete,edit,get,lock,reopen,revert,sync,unlock,', ',')
 
 " If there is a confirm message, then PFIF() will prompt user before
@@ -251,7 +250,7 @@ let s:fromDepotMapping = {}
 let s:toDepotMapping = {}
 
 aug Perforce | aug END " Define autocommand group.
-call genutils#AddToFCShellPre('P4FileChangedShell')
+call genutils#AddToFCShellPre('perforce#FileChangedShell')
 
 """ END: One-time initialization of some script variables }}}
 
@@ -309,7 +308,8 @@ function! s:describeHdlr(scriptOrigin, outputType, ...)
     call s:SetupFileBrowse()
     if index(s:p4CmdOptions, '-s') != -1
       setlocal modifiable
-      call append('$', "\t<SHOW DIFFS>")
+      silent! 2,$g/^Change \d\+ by \|\%$/
+            \ call append(line('.')-1, ['', "\t<SHOW DIFFS>", ''])
       setlocal nomodifiable
     else
       call s:SetupDiff()
@@ -484,44 +484,46 @@ function! s:revertHdlr(scriptOrigin, outputType, ...)
 endfunction
 
 function! s:changeHdlrImpl(outputType)
-  let _p4Arguments = []
+  let _p4Arguments = s:p4Arguments
   " If argument(s) is not a number...
   if len(s:p4Arguments) != 0 && s:indexMatching(s:p4Arguments, '^\d\+$') == -1
-    let _p4Arguments = s:p4Arguments
     let s:p4Arguments = [] " Let a new changelist be created.
   endif
   let retVal = perforce#PFIF(2, a:outputType, 'change')
-  if s:errCode == 0 && (s:StartBufSetup() ||
-        \ s:commandMode ==# s:CM_FILTER)
-    if len(_p4Arguments) != 0
-      if search('^Files:', 'w') && line('.') != line('$')
-        call genutils#SaveHardPosition('PChangeImpl')
+  let s:p4Arguments = _p4Arguments
+  if s:errCode == 0 && s:indexMatching(s:p4Arguments, '^\d\+$') == -1
+        \ && (s:StartBufSetup() || s:commandMode ==# s:CM_FILTER)
+    if len(s:p4Arguments) != 0
+      if search('^Files:\s*$', 'w') && line('.') != line('$')
         +
         call s:PushP4Context()
         try
           call call('perforce#PFrangeIF', [line("."), line("$"), 1, 0]+
                 \ s:p4Options+['++f', 'opened', '-c', 'default']+
-                \ _p4Arguments)
+                \ s:p4Arguments)
         finally
           call s:PopP4Context()
         endtry
 
         if s:errCode == 0
           call genutils#SilentSubstitute('^', '.,$s//\t/e')
-          call genutils#RestoreHardPosition('PChangeImpl')
           call genutils#SilentSubstitute('#\d\+ - \(\S\+\) .*$',
                 \ '.,$s//\t# \1/e')
         endif
-        call genutils#RestoreHardPosition('PChangeImpl')
-        call genutils#ResetHardPosition('PChangeImpl')
       endif
     endif
 
     call s:EndBufSetup()
     setl nomodified
-    if len(_p4Arguments) != 0 && &cmdheight > 1
+    if len(s:p4Arguments) != 0 && &cmdheight > 1
       " The message about W and WQ must have gone by now.
       redraw | call perforce#LastMessage()
+    endif
+  else
+    " Save the filelist in this changelist so that we can update their status
+    " later.
+    if search('Files:\s*$', 'w')
+      let b:p4OrgFilelist = getline(line('.')+1, line('$'))
     endif
   endif
   return retVal
@@ -1063,13 +1065,22 @@ endfunction " }}}
 
 function! s:DescribeGetCurrentItem() " {{{
   if getline(".") ==# "\t<SHOW DIFFS>"
-    let sOptIdx = s:indexMatching(b:p4CmdOptions, '^-s.\?$')
-    if sOptIdx != -1
-      call remove(b:p4CmdOptions, sOptIdx)
-      call perforce#PFRefreshActivePane()
+    let [changeHdrLine, col] = searchpos('^Change \zs\d\+ by ', 'bnW')
+    if changeHdrLine != 0
+      let changeNo = matchstr(getline(changeHdrLine), '\d\+', col-1)
+      let _modifiable = &l:modifiable
+      try
+        setlocal modifiable
+        call genutils#SaveHardPosition('DescribeGetCurrentItem')
+        exec changeHdrLine.',.PF ++f describe' s:_('DefaultDiffOptions') changeNo
+        call genutils#RestoreHardPosition('DescribeGetCurrentItem')
+        call genutils#ResetHardPosition('DescribeGetCurrentItem')
+      finally
+        let &l:modifiable = _modifiable
+      endtry
       call s:SetupDiff()
-      return ""
     endif
+    return ""
   endif
   return s:GetCurrentDepotFile(line('.'))
 endfunction " }}}
@@ -1170,7 +1181,7 @@ function! s:FilelogDiff2(line1, line2) " {{{
     let file2 = s:GetCurrentDepotFile(line2)
     if file2 !~# s:EMPTY_STR && file2 != file1
       " file2 will be older than file1.
-      exec "call perforce#PFIF(0, -2, \"" . (s:_('UseVimDiff2') ? 'vdiff2' : 'diff2') .
+      exec "call perforce#PFIF(0, 0, \"" . (s:_('UseVimDiff2') ? 'vdiff2' : 'diff2') .
             \ "\", file2, file1)"
     endif
   endif
@@ -1182,7 +1193,7 @@ function! s:FilelogSyncToCurrentItem() " {{{
     let answer = s:ConfirmMessage("Do you want to sync to: " . curItem . " ?",
           \ "&Yes\n&No", 2, "Question")
     if answer == 1
-      call perforce#PFIF(1, -2, 'sync', curItem)
+      call perforce#PFIF(1, 2, 'sync', curItem)
     endif
   endif
 endfunction " }}}
@@ -1193,7 +1204,7 @@ function! s:ChangesSubmitChangeList() " {{{
     let answer = s:ConfirmMessage("Do you want to submit change list: " .
           \ curItem . " ?", "&Yes\n&No", 2, "Question")
     if answer == 1
-      call perforce#PFIF(0, 0, 'submit', '++y', 'submit', '-c', curItem)
+      call perforce#PFIF(0, 0, '++y', 'submit', '-c', curItem)
     endif
   endif
 endfunction " }}}
@@ -1245,10 +1256,10 @@ function! s:SetupFileBrowse() " {{{
   nnoremap <silent> <buffer> P :PFileProps<CR>
   command! -buffer -nargs=0 PFileLog :call perforce#PFIF(1, 0, 'filelog',
         \ <SID>GetCurrentDepotFile(line(".")))
-  command! -buffer -nargs=0 PFileEdit :call perforce#PFIF(1, -1, 'edit',
+  command! -buffer -nargs=0 PFileEdit :call perforce#PFIF(1, 2, 'edit',
         \ <SID>GetCurrentItem())
   nnoremap <silent> <buffer> I :PFileEdit<CR>
-  command! -buffer -bar -nargs=0 PFileRevert :call perforce#PFIF(1, -1, 'revert',
+  command! -buffer -bar -nargs=0 PFileRevert :call perforce#PFIF(1, 2, 'revert',
         \ <SID>GetCurrentItem())
   nnoremap <silent> <buffer> R :PFileRevert \| PFRefreshActivePane<CR>
   command! -buffer -nargs=0 PFilePrint
@@ -1264,9 +1275,9 @@ function! s:SetupFileBrowse() " {{{
         \   echo 'PFilePrint: Binary file... ignored.' |
         \ endif
   nnoremap <silent> <buffer> p :PFilePrint<CR>
-  command! -buffer -nargs=0 PFileGet :call perforce#PFIF(1, -1, 'sync',
+  command! -buffer -nargs=0 PFileGet :call perforce#PFIF(1, 2, 'sync',
         \ <SID>GetCurrentDepotFile(line(".")))
-  command! -buffer -nargs=0 PFileSync :call perforce#PFIF(1, -1, 'sync',
+  command! -buffer -nargs=0 PFileSync :call perforce#PFIF(1, 2, 'sync',
         \ <SID>GetCurrentItem())
   nnoremap <silent> <buffer> S :PFileSync<CR>
   command! -buffer -nargs=0 PFileChange :call perforce#PFIF(0, 0, 'change', 
@@ -1337,25 +1348,12 @@ function! s:PChangesDescribeCurrentItem() " {{{
   let currentChangeNo = s:GetCurrentItem()
   if currentChangeNo !~# s:EMPTY_STR
     call perforce#PFIF(0, 1, 'describe', '-s', currentChangeNo)
-
-    " For pending changelist, we have to run a separate opened command to get
-    "   the list of opened files. We don't need <SHOW DIFFS> line, as it is
-    "   still not subbmitted. This works like p4win.
-    if getline('.') =~# "^.* \\*pending\\* '.*$"
-      wincmd p
-      setlocal modifiable
-      call setline(line('$'), "Affected files ...")
-      call append(line('$'), "")
-      call append(line('$'), "")
-      exec 'call perforce#PW(line("$"), line("$"), 0, "opened", "-c", currentChangeNo)'
-      wincmd p
-    endif
   endif
 endfunction " }}}
 
 " {{{
 function! perforce#PFSettings(...)
-  if s:_('SortSettings')
+  if s:_('SortSettings ')
     if exists("s:sortedSettings")
       let settings = s:sortedSettings
     else
@@ -1505,50 +1503,80 @@ endfunction
 
 function! s:W(quitWhenDone, commandName, ...)
   call call('s:ParseOptionsIF', [1, line('$'), 0, 5, a:commandName]+a:000)
-  call add(s:p4CmdOptions, '-i')
+  if index(s:p4CmdOptions, '-i') == -1
+    call insert(s:p4CmdOptions, '-i', 0)
+  endif
   let retVal = perforce#PW(1, line('$'), 2)
   if s:errCode == 0
     setl nomodified
     if a:quitWhenDone
       close
+    else
+      if s:p4Command ==# 'change' || s:p4Command ==# 'submit'
+        " Change number fixed, or files added/removed.
+        if s:FixChangeNo() || search('^Change \d\+ updated, ', 'w')
+          silent! undo
+          if search('^Files:\s*$', 'w')
+            let b:p4NewFilelist = getline(line('.')+1, line('$'))
+            if !exists('b:p4OrgFilelist')
+              let filelist = b:p4NewFilelist
+            else
+              " Find outersection.
+              let filelist = copy(b:p4NewFilelist)
+              call filter(filelist, 'index(b:p4OrgFilelist, v:val)==-1')
+              call extend(filelist, filter(copy(b:p4OrgFilelist), 'index(b:p4NewFilelist, v:val)==-1'))
+            endif
+            let files = map(filelist, 's:ConvertToLocalPath(v:val)')
+            call s:ResetFileStatusForFiles(files)
+          endif
+          silent! redo
+        endif
+      endif
     endif
   else
-    if search('^Change \d\+ created', 'w')
-      let newChangeNo = matchstr(getline('.'), '\d\+')
-      let _z = @z
-      let _undolevels=&undolevels
-      try
-        silent! keepjumps normal! 1G"zyG
-        undo
-        " Make the below changes such a way that they can't be undo. This in a
-        "   way, forces Vim to create an undo point, so that user can later
-        "   undo and see these changes, with proper change number and status
-        "   in place. This has the side effect of loosing the previous undo
-        "   history, which can be considered desirable, as otherwise the user
-        "   can undo this change and back to the new state.
-        set undolevels=-1
-        if search("^Change:\tnew$")
-          silent! keepjumps call setline('.', "Change:\t" . newChangeNo)
+    call s:FixChangeNo()
+  endif
+endfunction
+
+function! s:FixChangeNo()
+  if search('^Change \d\+ created', 'w') ||
+        \ search('^Change \d\+ renamed change \d\+ and submitted', 'w')
+    let newChangeNo = matchstr(getline('.'), '\d\+\ze\%(created\|and\)')
+    let _undolevels=&undolevels
+    try
+      let allLines = getline(1, line('$'))
+      silent! undo
+      " Make the below changes such a way that they can't be undo. This in a
+      "   way, forces Vim to create an undo point, so that user can later
+      "   undo and see these changes, with proper change number and status
+      "   in place. This has the side effect of loosing the previous undo
+      "   history, which can be considered desirable, as otherwise the user
+      "   can undo this change and back to the new state.
+      set undolevels=-1
+      if search("^Change:\t\%(new\|\d\+\)$")
+        silent! keepjumps call setline('.', "Change:\t" . newChangeNo)
+        " If no Date is present (happens for new changelists)
+        if !search("^Date:\t", 'w')
+          call append('.', ['', "Date:\t".strftime('%Y/%m/%d %H:%M:%S')])
         endif
-        if search("^Status:\tnew$")
-          silent! keepjumps call setline('.', "Status:\tpending")
-        endif
-        setl nomodified
-        let &undolevels=_undolevels
-        " Creating an undo point is actually undesirable, as the user will be
-        "   able to undo the above change and get back to the new state.
-        " Create an an undo point, so that user can later undo and see these
-        "   changes, with proper change number and status in place.
-        "exec "normal! i\<C-G>u"
-        silent! 0,$delete _
-        silent! put! =@z
-        call s:PFSetupForSpec()
-      finally
-        let @z = _z
-        let &undolevels=_undolevels
-      endtry
-      let b:p4CmdOptions = ['-o', 'change', newChangeNo]
-    endif
+      endif
+      if search("^Status:\tnew$")
+        silent! keepjumps call setline('.', "Status:\tpending")
+      endif
+      setl nomodified
+      let &undolevels=_undolevels
+      silent! 0,$delete _
+      call setline(1, allLines)
+      setl nomodified
+      call s:PFSetupForSpec()
+    finally
+      let &undolevels=_undolevels
+    endtry
+    let b:p4Command = 'change'
+    let b:p4CmdOptions = ['-i']
+    return 1
+  else
+    return 0
   endif
 endfunction
 
@@ -1606,30 +1634,21 @@ function! perforce#PFrangeIF(fline, lline, scriptOrigin, outputType,
   endif
 
 
-  " FIXME: May be we should not support specifying -ve outputType using ++o.
   let outputOptIdx = index(s:p4Options, '++o')
   if outputOptIdx != -1
     " Get the argument followed by ++o.
     let s:outputType = get(s:p4Options, outputIdx + 1) + 0
   endif
-  " If this command doesn't care about -ve outputType, then just take care of
+  " If this command prefers a dialog output, then just take care of
   "   it right here.
-  if s:outputType < 0 &&
-        \ index(s:limitLinesInDlgCmds, s:p4Command) == -1
-    let s:outputType = a:outputType + 2
+  if index(s:dlgOutputCmds, s:p4Command) != -1
+    let s:outputType = 2
   endif
   if ! a:scriptOrigin
     if exists('*s:{s:p4Command}Hdlr')
       return s:{s:p4Command}Hdlr(1, s:outputType, a:commandName)
     endif
   endif
-
-  " Temporarily switch to type "4" such that we can look into the number of
-  "   lines in the output and conditionally make it (0,1) or 2.
-  if s:outputType < 0
-    let s:outputType = 4
-  endif
-
  
   let modifyWindowName = 0
   let dontProcess = (index(s:p4Options, '++n') != -1)
@@ -1761,8 +1780,9 @@ function! perforce#PFrangeIF(fline, lline, scriptOrigin, outputType,
   let specMode = 0
   if index(s:specCmds, s:p4Command) != -1
     if index(s:p4CmdOptions, '-d') == -1
+          \ && index(s:p4CmdOptions, '-o') == -1
           \ && index(s:noOutputCmds, s:p4Command) == -1
-      call insert(s:p4CmdOptions, '-o', 0)
+      call add(s:p4CmdOptions, '-o')
     endif
 
     " Go into specification mode only if the user intends to edit the output.
@@ -1813,67 +1833,20 @@ function! perforce#PFrangeIF(fline, lline, scriptOrigin, outputType,
     endif
   endwhile
 
-  " If the original output type was -1, then check if the output is of too
-  "   many lines to display in a dialog.
-  if a:outputType < 0 && s:outputType == 4
-    let nLines = strlen(substitute(retVal, "[^\n]", "", "g"))
-    if nLines > s:_('MaxLinesInDialog')
-      " Open the window now.
-      let s:outputType = a:outputType + 2
-      let p4Options = s:GetP4Options()
-      " We want the window to be opened even on errors, to match that of
-      "   regular behavior.
-      let errCode = s:errCode
-      try
-        let s:errCode = 0
-        if s:GotoWindow(clearBuffer, s:GetCurFileName(), 1) == 0
-          silent! put! =retVal
-          call s:InitWindow(p4Options)
-          " Go back and fix the current context in the stack for the change in
-          "   value of s:outputType.
-        endif
-      finally
-        let s:errCode = errCode
-      endtry
-    elseif retVal !~ s:EMPTY_STR
-      let s:outputType = 2
-      if s:errCode == 0
-        call s:ConfirmMessage(retVal, "OK", 1, "Info")
-      endif
-    endif
-    if s:errCode != 0
-      call s:CheckShellError(retVal, s:outputType)
-    endif
+  if s:errCode == 0 && index(s:autoreadCmds, s:p4Command) != -1
+    call s:ResetFileStatusForFiles(s:p4Arguments)
   endif
 
   if s:errCode != 0
     return retVal
   endif
 
-  " outputType < 0 is used only for the top-level calls, so it is unlikely
-  "   that the stack contains multiple perforce commands (unless when the call
-  "   gets redirected through :PF), and even if it does, it is very unlikely
-  "   that they are for the same perforce command, so just check the
-  "   s:p4Command value.
-  " CAUTION: It is likely that there are multiple stack items for the same
-  "   command, but I am not going to bother about it for now.
-  if a:outputType < 0
-    if s:NumP4Contexts() > 0
-      " Temporarily switch to the callers context so that we can modify and
-      "   push it back on the stack.
-      let curCntxtStr = s:GetP4ContextVars()
-      let outputType = s:outputType
-      call s:PopP4Context()
-      if a:commandName ==# s:p4Command
-        " Correct the outputType.
-        let s:outputType = outputType
-      endif
-      call s:PushP4Context()
-      " Restore the original context.
-      call s:SetP4ContextVars(curCntxtStr)
-    endif
-  endif
+  call s:SetupWindow(specMode)
 
+  return retVal
+endfunction
+
+function! s:SetupWindow(specMode)
   if s:StartBufSetup()
     " If this command has a handler for the individual items, then enable the
     " item selection commands.
@@ -1890,13 +1863,15 @@ function! perforce#PFrangeIF(fline, lline, scriptOrigin, outputType,
     endif
 
     if s:NewWindowCreated()
-      if specMode
+      if a:specMode
         " It is not possible to have an s:p4Command which is in s:allCommands
         "         and still not be the actual intended command.
         command! -buffer -nargs=* W :call call('<SID>W',
-              \ [0]+b:p4Options+[b:p4Command]+b:p4CmdOptions+split(<q-args>, '\s'))
+              \ [0]+b:p4Options+[b:p4Command]+b:p4CmdOptions+split(<q-args>,
+              \ '\s'))
         command! -buffer -nargs=* WQ :call call('<SID>W',
-              \ [1]+b:p4Options+[b:p4Command]+b:p4CmdOptions+split(<q-args>, '\s'))
+              \ [1]+b:p4Options+[b:p4Command]+b:p4CmdOptions+split(<q-args>,
+              \ '\s'))
         call s:EchoMessage("When done, save " . s:p4Command .
               \ " spec by using :W or :WQ command. Undo on errors.", 'None')
         call s:PFSetupForSpec()
@@ -1905,7 +1880,7 @@ function! perforce#PFrangeIF(fline, lline, scriptOrigin, outputType,
       endif
     endif
 
-    if navigateCmd
+    if index(s:navigateCmds, s:p4Command) != -1
       nnoremap <silent> <buffer> <C-O> :call <SID>NavigateBack()<CR>
       nnoremap <silent> <buffer> <BS> :call <SID>NavigateBack()<CR>
       nnoremap <silent> <buffer> <Tab> :call <SID>NavigateForward()<CR>
@@ -1913,8 +1888,6 @@ function! perforce#PFrangeIF(fline, lline, scriptOrigin, outputType,
 
     call s:EndBufSetup()
   endif
-
-  return retVal
 endfunction
 
 function! s:ExpandRevision(fName, revType, revSpec)
@@ -2084,15 +2057,15 @@ endfunction
 
 " Get/refresh filestatus for the specified buffer with optimizations.
 function! perforce#GetFileStatus(buf, refresh)
-  " If it is not a normal buffer, then ignore it.
-  if &buftype != ''
-    return ""
-  endif
-
   if ! type(a:buf) " If number.
     let bufNr = (a:buf == 0) ? bufnr('%') : a:buf
   else
     let bufNr = bufnr(a:buf)
+  endif
+
+  " If it is not a normal buffer, then ignore it.
+  if getbufvar(bufNr, '&buftype') != '' || bufname(bufNr) == ''
+    return ""
   endif
   if bufNr == -1 || (!a:refresh && s:_('OptimizeActiveStatus') &&
         \ getbufvar(bufNr, "p4FStatDone"))
@@ -2106,6 +2079,20 @@ function! perforce#GetFileStatus(buf, refresh)
   endif
 
   return s:GetFileStatusImpl(bufNr)
+endfunction
+
+function! s:ResetFileStatusForFiles(files)
+  for file in a:files
+    let bufNr = genutils#FindBufferForName(file)
+    if bufNr != -1
+      " FIXME: Check for other tabs also.
+      if bufwinnr(bufNr) != -1 " If currently visible.
+        call perforce#GetFileStatus(bufNr, 1)
+      else
+        call s:ResetFileStatusForBuffer(bufNr)
+      endif
+    endif
+  endfor
 endfunction
 
 function! s:ResetFileStatusForBuffer(bufNr)
@@ -2250,9 +2237,10 @@ function! s:CheckOutFile()
           \ "from perforce?", "&Yes\n&No\n&Cancel", s:_('CheckOutDefault'),
           \ "Question")
     if option == 1
-      call perforce#PFIF(1, -1, 'edit')
+      call perforce#PFIF(1, 2, 'edit')
       if ! s:errCode
         edit
+        call perforce#GetFileStatus(expand('<abuf>') + 0, 1)
       endif
     elseif option == 3
       call s:CancelEdit(0)
@@ -2274,7 +2262,7 @@ function! s:CancelEdit(stage)
   aug END
 endfunction
 
-function! P4FileChangedShell()
+function! perforce#FileChangedShell()
   let bufNr = expand("<abuf>") + 0
   if s:_('EnableActiveStatus')
     call s:ResetFileStatusForBuffer(bufNr)
@@ -2331,8 +2319,11 @@ function! s:PFImpl(clearBuffer, testMode) " {{{
   if s:commandMode != s:CM_PIPE && s:commandMode != s:CM_FILTER
     if s:outputType == 0 || s:outputType == 1
       " Only when "clear with undo" is selected, we optimize out the call.
-      call s:GotoWindow((!s:refreshWindowsAlways && (a:clearBuffer == 1)) ?
-            \ 2 : a:clearBuffer, p4OrgFileName, 0)
+      if s:GotoWindow(s:outputType,
+            \ (!s:refreshWindowsAlways && (a:clearBuffer == 1)) ?
+            \  2 : a:clearBuffer, p4OrgFileName, 0) != 0
+        return s:errCode
+      endif
     endif
   endif
 
@@ -2389,14 +2380,44 @@ function! s:PFImpl(clearBuffer, testMode) " {{{
     let v:errmsg = ""
     " If we have non-null output, then handling it is still pending.
     if output !~# s:EMPTY_STR
+      let echoGrp = 'NONE' " The default
+      let maxLinesInDlg = s:_('MaxLinesInDialog')
+      if s:outputType == 2 && maxLinesInDlg != -1
+        " Count NLs.
+        let nNLs = 0
+        let nlIdx = 0
+        while 1
+          let nlIdx = stridx(output, "\n", nlIdx+1)
+          if nlIdx != -1
+            let nNLs += 1
+            if nNLs > maxLinesInDlg
+              break
+            endif
+          else
+            break
+          endif
+        endwhile
+        if nNLs > maxLinesInDlg
+          " NOTE: Keep in sync with that at the start of the function.
+          if s:GotoWindow(s:outputType,
+                \ (!s:refreshWindowsAlways && (a:clearBuffer == 1)) ?
+                \  2 : a:clearBuffer, p4OrgFileName, 0) == 0
+            let s:outputType = 0
+          else
+            let s:outputType = 3
+            let echoGrp = 'WarningMsg'
+          endif
+        endif
+      endif
       " If the output has to be shown in a dialog, bring up a dialog with the
       "   output, otherwise show it in the current window.
       if s:outputType == 0 || s:outputType == 1
         silent! put! =output
+        1
       elseif s:outputType == 2
         call s:ConfirmMessage(output, "OK", 1, "Info")
       elseif s:outputType == 3
-        echo output
+        call s:EchoMessage(output, echoGrp)
       elseif s:outputType == 4
         " Do nothing we will just return it.
       endif
@@ -2919,6 +2940,7 @@ function! s:ShowVimError(errmsg, stack)
   endif
   redraw " Cls, such that it is only available in the message list.
   let s:errCode = 1
+  return s:errCode
 endfunction
 
 function! s:EchoMessage(msg, type)
@@ -3107,7 +3129,7 @@ function! P4IncludeExpr(path)
 endfunction
 
 function! s:ConvertToLocalPath(path)
-  let fileName = substitute(a:path, '#[^#]\+$', '', '')
+  let fileName = substitute(a:path, '^\s\+\|\s*#[^#]\+$', '', 'g')
   if s:IsDepotPath(fileName)
     if s:_('UseClientViewMap')
       call s:CondUpdateViewMappings()
@@ -3257,7 +3279,7 @@ endfunction
 "   0 - clear with undo.
 "   1 - clear with no undo.
 "   2 - don't clear
-function! s:GotoWindow(clearBuffer, p4OrgFileName, cmdCompleted)
+function! s:GotoWindow(outputType, clearBuffer, p4OrgFileName, cmdCompleted)
   let bufNr = genutils#FindBufferForName(s:p4WinName)
   " NOTE: Precautionary measure to avoid accidentally matching an existing
   "   buffer and thus overwriting the contents.
@@ -3275,7 +3297,7 @@ function! s:GotoWindow(clearBuffer, p4OrgFileName, cmdCompleted)
   try
     "set eventignore=BufRead,BufReadPre,BufEnter,BufNewFile
     set eventignore=all
-    if s:outputType == 1 " Preview
+    if a:outputType == 1 " Preview
       let alreadyOpen = 0
       try
         wincmd P
@@ -3312,8 +3334,10 @@ function! s:GotoWindow(clearBuffer, p4OrgFileName, cmdCompleted)
       " For navigation.
       normal! mt
     endif
+  catch /^Vim\%((\a\+)\)\=:E788/ " Happens during FileChangedRO.
+    return 788 " E788
   catch
-    call s:ShowVimError("Exception while opening new window.\n" . v:exception,
+    return s:ShowVimError("Exception while opening new window.\n" . v:exception,
           \ v:throwpoint)
   finally
     let &eventignore = _eventignore
@@ -3459,7 +3483,10 @@ endfunction
 function! s:PFSetupForSpec()
   setlocal modifiable
   setlocal buftype=
-  au Perforce BufWriteCmd <buffer> nested :W
+  exec 'aug Perforce'.bufnr('%')
+    au!
+    au BufWriteCmd <buffer> nested :W
+  aug END
 endfunction
 
 function! perforce#WipeoutP4Buffers(...)
@@ -3493,14 +3520,11 @@ function! perforce#PFRefreshActivePane()
   if exists("b:p4UserArgs")
     call genutils#SaveSoftPosition('Perforce')
 
-    let _modifiable = &l:modifiable
     try
-      setlocal modifiable
+      silent! undo
       call call('perforce#PFrangeIF', b:p4UserArgs)
     catch
       call s:ShowVimError(v:exception, v:throwpoint)
-    finally
-      let &l:modifiable=_modifiable
     endtry
 
     call genutils#RestoreSoftPosition('Perforce')
